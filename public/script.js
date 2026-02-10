@@ -26,25 +26,15 @@ const WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const TALK_DISTANCE = 120; 
 
-// ============================
-// ★エリア・座標設定 (調整版)
-// ============================
+// エリア設定
 const MEETING_ROOMS = [
-    { 
-        id: 'A', name: '大会議室 (ガラス張り)', type: 'rect', 
-        x: 40, y: 180, w: 680, h: 800, capacity: 10 
-    },
-    { 
-        id: 'B', name: 'ソファ席 (会議室B)', type: 'rect', 
-        // ★右側の枠を少し狭くしました (幅500 -> 420)
-        x: 820, y: 550, w: 420, h: 450, capacity: 6 
-    }
+    { id: 'A', name: '大会議室 (ガラス張り)', type: 'rect', x: 40, y: 180, w: 680, h: 800, capacity: 10 },
+    { id: 'B', name: 'ソファ席 (会議室B)', type: 'rect', x: 820, y: 550, w: 420, h: 450, capacity: 6 }
 ];
 
 const ZONES = {
     SILENT: { 
         name: "集中ブース (会話禁止)", 
-        // ★右側の枠を少し狭くしました (x < 1600 -> x < 1450)
         check: (x, y) => (x > 750 && x < 1450 && y < 450), 
         allowMic: false 
     },
@@ -88,8 +78,12 @@ async function startSetup() {
         await getDevices('micSelect', 'speakerSelect');
         document.getElementById('start-overlay').style.display = 'none';
         document.getElementById('entry-modal').style.display = 'flex';
-        document.getElementById('micSelect').addEventListener('change', startMicTest);
-        startMicTest();
+        
+        // 入室前のマイクテスト
+        const micSelect = document.getElementById('micSelect');
+        micSelect.addEventListener('change', () => startMicTest('micSelect', 'mic-visualizer-bar-entry'));
+        startMicTest('micSelect', 'mic-visualizer-bar-entry');
+
     } catch (err) {
         alert("マイクの使用を許可してください。");
     }
@@ -140,7 +134,6 @@ function startConnection() {
     
     myPeer = new Peer();
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
-    
     myPeer.on('call', call => {
         call.answer(myStream);
         handleStream(call);
@@ -154,7 +147,123 @@ function startConnection() {
 function loop() { draw(); requestAnimationFrame(loop); }
 
 // ============================
-// エリア・音声制御
+// デバイス設定 & 適用処理 (機能強化)
+// ============================
+async function getDevices(mId, sId) {
+    try {
+        const d = await navigator.mediaDevices.enumerateDevices();
+        const m = document.getElementById(mId), s = document.getElementById(sId);
+        m.innerHTML = ''; s.innerHTML = '';
+        d.forEach(v => {
+            const o = document.createElement('option'); o.value = v.deviceId; o.text = v.label || v.kind;
+            if(v.kind==='audioinput') m.appendChild(o);
+            if(v.kind==='audiooutput') s.appendChild(o);
+        });
+    } catch(e) {}
+}
+
+function openSettings() { 
+    // 設定画面を開くときに現在のデバイス一覧を取得
+    getDevices('micSelectInGame', 'speakerSelectInGame').then(() => {
+        // 現在使用中のマイクを選択状態にする（簡易実装: ストリームからラベル一致などを探すのは複雑なので、とりあえずデフォルトor先頭になる）
+        // マイクテストを開始
+        const micSelect = document.getElementById('micSelectInGame');
+        micSelect.onchange = () => startMicTest('micSelectInGame', 'mic-visualizer-bar-game');
+        startMicTest('micSelectInGame', 'mic-visualizer-bar-game');
+    });
+    document.getElementById('settings-modal').style.display = 'flex'; 
+}
+
+function closeSettings() { 
+    document.getElementById('settings-modal').style.display = 'none'; 
+}
+
+// ★設定適用ボタンの処理
+async function applySettings() {
+    const micId = document.getElementById('micSelectInGame').value;
+    const spkId = document.getElementById('speakerSelectInGame').value;
+
+    // 1. マイクの切り替え
+    if (micId) {
+        try {
+            const newStream = await navigator.mediaDevices.getUserMedia({
+                audio: { deviceId: { exact: micId }, echoCancellation: true, noiseSuppression: true }
+            });
+            
+            // 古いストリームを停止
+            if (myStream) myStream.getTracks().forEach(t => t.stop());
+            
+            myStream = newStream;
+            setMicState(!isMicMutedByUser); // 現在のミュート状態を適用
+
+            // ★重要: すでに通話中の相手に対して、送る音声を新しいマイクに切り替える
+            Object.values(peers).forEach(call => {
+                const sender = call.peerConnection.getSenders().find(s => s.track.kind === 'audio');
+                if (sender) {
+                    sender.replaceTrack(newStream.getAudioTracks()[0]);
+                }
+            });
+
+            alert("設定を適用しました（マイク切替完了）");
+            
+        } catch (e) {
+            alert("マイクの切り替えに失敗しました: " + e);
+        }
+    }
+
+    // 2. スピーカーの切り替え (Chrome等のみ対応)
+    if (spkId) {
+        document.querySelectorAll('audio').forEach(audio => {
+            if (audio.setSinkId) audio.setSinkId(spkId).catch(e => {});
+        });
+    }
+
+    closeSettings();
+}
+
+function testSpeaker() {
+    const AC = window.AudioContext || window.webkitAudioContext; const ctx = new AC(); const osc = ctx.createOscillator();
+    const spkId = document.getElementById('speakerSelect').value;
+    if (spkId && ctx.setSinkId) ctx.setSinkId(spkId).catch(e=>{});
+    osc.connect(ctx.destination); osc.frequency.value = 523.25; osc.start(); osc.stop(ctx.currentTime + 0.3);
+}
+
+// マイクテスト (共通化)
+function startMicTest(selectId, barId) {
+    const micId = document.getElementById(selectId).value; 
+    if(!micId) return;
+    
+    // テスト用の独立したストリームを取得（本番用ストリームとは別にする）
+    navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } }).then(s => {
+        // 前のコンテキストがあれば閉じる（簡易実装）
+        // 実際はAudioContextは使い回すが、テスト用なので都度作成でOK
+        const AC = window.AudioContext || window.webkitAudioContext; 
+        const ctx = new AC(); 
+        const src = ctx.createMediaStreamSource(s);
+        const anl = ctx.createAnalyser(); anl.fftSize = 256; src.connect(anl);
+        const data = new Uint8Array(anl.frequencyBinCount); 
+        const bar = document.getElementById(barId);
+        
+        const upd = () => { 
+            // モーダルが閉じたら停止（ストリームも止めるべきだが簡易版）
+            const modal1 = document.getElementById('entry-modal');
+            const modal2 = document.getElementById('settings-modal');
+            if(modal1.style.display==='none' && modal2.style.display==='none') {
+                s.getTracks().forEach(t=>t.stop());
+                ctx.close();
+                return;
+            }
+            anl.getByteFrequencyData(data); 
+            let sum=0; for(let i=0;i<data.length;i++)sum+=data[i]; 
+            if(bar) bar.style.width=Math.min(100,(sum/data.length)*3)+'%'; 
+            requestAnimationFrame(upd); 
+        }; 
+        upd();
+    }).catch(e=>{});
+}
+
+// ============================
+// 音声・エリア制御
 // ============================
 function checkAudioStatus() {
     const currentZone = getCurrentZone();
@@ -371,19 +480,16 @@ function draw() {
         ctx.fillStyle = "#eee"; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     }
 
-    // 会議室枠線
     MEETING_ROOMS.forEach(r => {
         ctx.fillStyle = "rgba(41, 128, 185, 0.2)"; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.strokeStyle = "rgba(41, 128, 185, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = "rgba(0, 0, 0, 0.7)"; ctx.font = "bold 24px sans-serif"; ctx.fillText(r.name, r.x + 30, r.y + 40);
     });
 
-    // 禁止エリア (右側を1450まで縮小)
     ctx.fillStyle = "rgba(231, 76, 60, 0.1)"; ctx.fillRect(750, 0, 700, 450); 
     ctx.strokeStyle = "rgba(192, 57, 43, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(750, 0, 700, 450);
     ctx.fillStyle = "rgba(192, 57, 43, 1)"; ctx.font = "bold 20px sans-serif"; ctx.fillText("🚫 会話禁止 (Focus Zone)", 900, 60);
 
-    // 会話範囲
     if (!myRoomId && getCurrentZone() === ZONES.LIVING) {
         ctx.beginPath();
         ctx.arc(myX, myY, TALK_DISTANCE, 0, Math.PI * 2);
@@ -422,37 +528,6 @@ function getWorldPos(cx, cy) {
 function toggleMic() { isMicMutedByUser = !isMicMutedByUser; checkAudioStatus(); }
 function setMicState(isOn) { if (myStream && myStream.getAudioTracks()[0]) myStream.getAudioTracks()[0].enabled = isOn; }
 function exitOffice() { if(confirm("退出しますか？")) location.reload(); }
-
-async function getDevices(mId, sId) {
-    try {
-        const d = await navigator.mediaDevices.enumerateDevices();
-        const m = document.getElementById(mId), s = document.getElementById(sId);
-        m.innerHTML = ''; s.innerHTML = '';
-        d.forEach(v => {
-            const o = document.createElement('option'); o.value = v.deviceId; o.text = v.label || v.kind;
-            if(v.kind==='audioinput') m.appendChild(o);
-            if(v.kind==='audiooutput') s.appendChild(o);
-        });
-    } catch(e) {}
-}
-
-function openSettings() { getDevices('micSelectInGame', 'speakerSelectInGame'); document.getElementById('settings-modal').style.display = 'flex'; }
-function closeSettings() { document.getElementById('settings-modal').style.display = 'none'; }
-function testSpeaker() {
-    const AC = window.AudioContext || window.webkitAudioContext; const ctx = new AC(); const osc = ctx.createOscillator();
-    const spkId = document.getElementById('speakerSelect').value;
-    if (spkId && ctx.setSinkId) ctx.setSinkId(spkId).catch(e=>{});
-    osc.connect(ctx.destination); osc.frequency.value = 523.25; osc.start(); osc.stop(ctx.currentTime + 0.3);
-}
-function startMicTest() {
-    const micId = document.getElementById('micSelect').value; if(!micId) return;
-    navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } }).then(s => {
-        const AC = window.AudioContext || window.webkitAudioContext; const ctx = new AC(); const src = ctx.createMediaStreamSource(s);
-        const anl = ctx.createAnalyser(); anl.fftSize = 256; src.connect(anl);
-        const data = new Uint8Array(anl.frequencyBinCount); const bar = document.getElementById('mic-visualizer-bar');
-        const upd = () => { if(document.getElementById('entry-modal').style.display==='none')return; anl.getByteFrequencyData(data); let sum=0; for(let i=0;i<data.length;i++)sum+=data[i]; bar.style.width=Math.min(100,(sum/data.length)*3)+'%'; requestAnimationFrame(upd); }; upd();
-    }).catch(e=>{});
-}
 
 const spd = 10;
 const setupBtn = (id, dx, dy) => {
