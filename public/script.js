@@ -1,5 +1,5 @@
 // ============================
-// グローバル変数
+// グローバル変数 & 設定
 // ============================
 let socket = null, myPeer = null, myStream = null;
 let users = {}, peers = {};
@@ -14,25 +14,38 @@ let audioContext = null;
 
 // ★ズーム設定
 let cameraScale = 1.0;
-const MIN_ZOOM = 0.4; // 一番引いた状態
-const MAX_ZOOM = 2.0; // 一番寄った状態
+const MIN_ZOOM = 0.4; // 最小ズーム（引き）
+const MAX_ZOOM = 2.0; // 最大ズーム（寄り）
 
+// 背景画像
 const bgImage = new Image();
 bgImage.src = "bg.jpg"; 
 
 const WORLD_W = 2000;
 const WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+// ★会話可能距離 (アバター約3人分)
 const TALK_DISTANCE = 120; 
 
+// 会議室データ
 const MEETING_ROOMS = [
     { id: 'A', name: '大会議室 (ガラス張り)', type: 'rect', x: 40, y: 180, w: 680, h: 800, capacity: 10 },
     { id: 'B', name: 'ソファ席 (会議室B)', type: 'rect', x: 820, y: 550, w: 500, h: 450, capacity: 6 }
 ];
 
+// エリア定義
 const ZONES = {
-    SILENT: { name: "集中ブース (会話禁止)", check: (x, y) => (x > 750 && x < 1600 && y < 450), allowMic: false },
-    LIVING: { name: "コミュニティハブ (距離会話)", check: (x, y) => true, allowMic: true }
+    SILENT: { 
+        name: "集中ブース (会話禁止)", 
+        check: (x, y) => (x > 750 && x < 1600 && y < 450), 
+        allowMic: false 
+    },
+    LIVING: { 
+        name: "コミュニティハブ (距離会話)", 
+        check: (x, y) => true, 
+        allowMic: true 
+    }
 };
 
 const canvas = document.getElementById('gameCanvas');
@@ -40,7 +53,7 @@ const ctx = canvas.getContext('2d');
 const micBtn = document.getElementById('micBtn');
 
 // ============================
-// 1. セットアップ
+// 1. セットアップ & イベント
 // ============================
 window.addEventListener('load', () => {
     canvas.width = window.innerWidth;
@@ -48,19 +61,17 @@ window.addEventListener('load', () => {
     if (isMobile) document.getElementById('d-pad').style.display = 'block';
 });
 
-// マウスホイールでズーム
+// ズーム操作 (マウスホイール)
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.1 : 0.1;
     changeZoom(delta);
 }, { passive: false });
 
-// ズーム変更関数
 function changeZoom(delta) {
     cameraScale += delta;
     cameraScale = Math.max(MIN_ZOOM, Math.min(cameraScale, MAX_ZOOM));
-    // 画面再描画
-    draw();
+    draw(); // 即座に再描画
 }
 
 async function startSetup() {
@@ -120,14 +131,25 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
 function startConnection() {
     socket = io();
     socket.on('connect', () => { myId = socket.id; });
-    socket.on('updateUsers', (data) => { users = data; updateVolumes(); });
+    
+    // ユーザー情報更新時
+    socket.on('updateUsers', (data) => { 
+        users = data; 
+        updateVolumes(); // 音量計算
+    });
     
     myPeer = new Peer();
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
-    myPeer.on('call', call => { call.answer(myStream); handleStream(call); });
+    
+    myPeer.on('call', call => {
+        call.answer(myStream);
+        handleStream(call);
+    });
 
+    // 接続チェック (1.5秒ごと)
     setInterval(connectToUsers, 1500);
-    setInterval(updateVolumes, 200);
+    // 音量チェック (0.5秒ごと)
+    setInterval(updateVolumes, 500);
 
     loop();
 }
@@ -135,7 +157,7 @@ function startConnection() {
 function loop() { draw(); requestAnimationFrame(loop); }
 
 // ============================
-// 音声・エリア制御
+// エリア・音声制御
 // ============================
 function checkAudioStatus() {
     const currentZone = getCurrentZone();
@@ -173,6 +195,9 @@ function updateMicBtn(enabled, text) {
     }
 }
 
+// ============================
+// 接続管理 (間引き処理)
+// ============================
 function connectToUsers() {
     if (!myPeer || !myStream || !myId) return;
     const myZone = getCurrentZone();
@@ -185,8 +210,10 @@ function connectToUsers() {
         let shouldConnect = false;
 
         if (myRoomId) {
+            // 会議室: 同じ部屋IDの人
             if (u.roomId === myRoomId) shouldConnect = true;
         } else {
+            // リビング: お互い部屋なし
             if (!u.roomId) {
                 const uZoneIsSilent = ZONES.SILENT.check(u.x, u.y);
                 if (myZone.allowMic && !uZoneIsSilent) {
@@ -197,7 +224,7 @@ function connectToUsers() {
 
         if (shouldConnect) {
             if (!peers[u.peerId]) {
-                if (myPeer.id > u.peerId) {
+                if (myPeer.id > u.peerId) { // 重複防止
                     const call = myPeer.call(u.peerId, myStream);
                     peers[u.peerId] = call;
                     handleStream(call);
@@ -213,6 +240,9 @@ function connectToUsers() {
     });
 }
 
+// ============================
+// ★音量・距離制御 (スマホ対応版)
+// ============================
 function updateVolumes() {
     Object.keys(users).forEach(targetId => {
         if (targetId === myId) return;
@@ -223,15 +253,25 @@ function updateVolumes() {
 
         let volume = 0;
         if (myRoomId) {
+            // 会議室: 全員聞こえる
             if (u.roomId === myRoomId) volume = 1.0;
         } else {
+            // リビング: 距離計算
             if (!u.roomId) {
                 const dist = Math.sqrt((myX - u.x)**2 + (myY - u.y)**2);
                 if (dist <= TALK_DISTANCE) volume = 1.0;
                 else volume = 0;
             }
         }
-        audioEl.volume = volume;
+
+        // ★スマホ対応: 音量0の場合は「ミュート」にする
+        // iOSは volume プロパティを無視するため、mutedプロパティで制御する
+        if (volume <= 0.01) {
+            audioEl.muted = true;
+        } else {
+            audioEl.muted = false;
+            audioEl.volume = volume;
+        }
     });
 }
 
@@ -241,10 +281,14 @@ function handleStream(call) {
         const audio = document.createElement('audio');
         audio.id = "audio-" + call.peer;
         audio.srcObject = remoteStream;
-        audio.autoplay = true; audio.playsInline = true;
+        audio.autoplay = true; 
+        audio.playsInline = true;
+        
         const spkId = document.getElementById('speakerSelectInGame').value;
         if(spkId && audio.setSinkId) audio.setSinkId(spkId).catch(e=>{});
-        audio.volume = 0; 
+        
+        audio.volume = 0; // 最初は無音
+        audio.muted = true; // 最初はミュート
         document.body.appendChild(audio);
     });
     call.on('close', () => { removeAudio(call.peer); delete peers[call.peer]; });
@@ -261,7 +305,6 @@ function removeAudio(peerId) {
 // ============================
 canvas.addEventListener('click', (e) => {
     if (myRoomId) return;
-    // ★重要: クリック位置をズームを考慮して計算
     const pos = getWorldPos(e.clientX, e.clientY);
     
     const room = MEETING_ROOMS.find(r => 
@@ -298,8 +341,8 @@ function showRoomModal(room) {
         myRoomId = room.id;
         myX = room.x + room.w/2 - 50 + Math.random()*100;
         myY = room.y + room.h/2 - 50 + Math.random()*100;
-        
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
+        
         document.getElementById('room-modal').style.display = 'none';
         document.getElementById('leaveRoomBtn').style.display = 'block';
         document.getElementById('room-status').style.display = 'block';
@@ -318,24 +361,26 @@ function leaveMeetingRoom() {
 }
 
 // ============================
-// 描画システム (ズーム対応)
+// 描画システム (バグ修正済み)
 // ============================
 function draw() {
-    // 1. スケール適用後の「画面に見えている範囲」の幅と高さを計算
+    // 1. 画面リセット（残像防止）
+    ctx.setTransform(1, 0, 0, 1, 0, 0); 
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#2c3e50"; 
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 2. カメラ位置計算
     const visibleW = canvas.width / cameraScale;
     const visibleH = canvas.height / cameraScale;
 
-    // 2. カメラ位置計算 (自分が中心になるように)
     let camX = myX - visibleW / 2;
     let camY = myY - visibleH / 2;
-
-    // 3. 端っこの制限 (ズーム時は見切れ範囲が変わる)
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
     camY = Math.max(0, Math.min(camY, WORLD_H - visibleH));
 
+    // 3. ズーム適用
     ctx.save();
-    
-    // ★重要: 先に拡大してから、カメラ位置へずらす
     ctx.scale(cameraScale, cameraScale);
     ctx.translate(-camX, -camY);
 
@@ -346,19 +391,19 @@ function draw() {
         ctx.fillStyle = "#eee"; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     }
 
-    // 会議室枠線
+    // エリア枠線
     MEETING_ROOMS.forEach(r => {
         ctx.fillStyle = "rgba(41, 128, 185, 0.2)"; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.strokeStyle = "rgba(41, 128, 185, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = "rgba(0, 0, 0, 0.7)"; ctx.font = "bold 24px sans-serif"; ctx.fillText(r.name, r.x + 30, r.y + 40);
     });
 
-    // 禁止エリア枠線
+    // 禁止エリア
     ctx.fillStyle = "rgba(231, 76, 60, 0.1)"; ctx.fillRect(750, 0, 850, 450); 
     ctx.strokeStyle = "rgba(192, 57, 43, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(750, 0, 850, 450);
     ctx.fillStyle = "rgba(192, 57, 43, 1)"; ctx.font = "bold 20px sans-serif"; ctx.fillText("🚫 会話禁止 (Focus Zone)", 1050, 60);
 
-    // 会話可能範囲の可視化
+    // 会話範囲の可視化
     if (!myRoomId && getCurrentZone() === ZONES.LIVING) {
         ctx.beginPath();
         ctx.arc(myX, myY, TALK_DISTANCE, 0, Math.PI * 2);
@@ -384,21 +429,15 @@ function draw() {
     ctx.restore();
 }
 
-// ★重要: クリック位置をズーム率で補正してワールド座標に変換
+// 座標変換 (ズーム対応)
 function getWorldPos(cx, cy) {
     const visibleW = canvas.width / cameraScale;
     const visibleH = canvas.height / cameraScale;
-    
     let camX = myX - visibleW / 2;
     let camY = myY - visibleH / 2;
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
     camY = Math.max(0, Math.min(camY, WORLD_H - visibleH));
-    
-    // 画面上のクリック位置をスケールで割って、カメラ位置を足す
-    return { 
-        x: (cx / cameraScale) + camX, 
-        y: (cy / cameraScale) + camY 
-    };
+    return { x: (cx / cameraScale) + camX, y: (cy / cameraScale) + camY };
 }
 
 // ユーティリティ
