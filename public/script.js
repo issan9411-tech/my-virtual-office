@@ -5,8 +5,8 @@ let socket = null, myPeer = null, myStream = null;
 let users = {}, peers = {};
 let myId = null;
 
-// 初期位置：右下のソファエリア付近
-let myX = 1400, myY = 800; 
+// 初期位置：右下のカフェエリア付近
+let myX = 1400, myY = 900; 
 let myName = "ゲスト";
 let myRoomId = null; 
 let isMicMutedByUser = true;
@@ -22,18 +22,26 @@ const WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 // ============================
-// エリア・座標設定 (イラスト合わせ)
+// エリア・座標設定 (修正版)
 // ============================
 
-// 会議室データ (左側のガラス部屋)
+// 会議室データ
 const MEETING_ROOMS = [
     { 
         id: 'A', 
-        name: '大会議室', 
+        name: '大会議室 (ガラス張り)', 
         type: 'rect', 
-        // イラストの左側ガラス部屋の範囲
+        // 左側のガラス部屋全体
         x: 40, y: 180, w: 680, h: 800, 
         capacity: 10 
+    },
+    { 
+        id: 'B', 
+        name: 'ソファ席 (会議室B)', 
+        type: 'rect', 
+        // 真ん中の青いソファ3つがあるエリア
+        x: 820, y: 550, w: 500, h: 450, 
+        capacity: 6 
     }
 ];
 
@@ -42,16 +50,9 @@ const ZONES = {
     // 集中ブース (奥の白いポッド4つ周辺)
     SILENT: { 
         name: "集中ブース (会話禁止)", 
-        // 奥の壁沿い、会議室の右隣からカフェの手前まで
-        check: (x, y) => (x > 750 && x < 1600 && y < 400),
+        // 奥の壁沿いエリア
+        check: (x, y) => (x > 750 && x < 1600 && y < 450),
         allowMic: false
-    },
-    // 会議室エリア (左側)
-    MEETING_AREA: {
-        name: "会議室エリア",
-        // 会議室の座標とリンク
-        check: (x, y) => (x < 740),
-        allowMic: true
     },
     // その他 (リビング/カフェ)
     LIVING: { 
@@ -135,7 +136,6 @@ function startConnection() {
     myPeer = new Peer();
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
     
-    // 着信処理 (重要)
     myPeer.on('call', call => {
         call.answer(myStream);
         handleStream(call);
@@ -212,7 +212,6 @@ function connectToUsers() {
 
         if (shouldConnect) {
             if (!peers[u.peerId]) {
-                // 重複発信防止
                 if (myPeer.id > u.peerId) {
                     const call = myPeer.call(u.peerId, myStream);
                     peers[u.peerId] = call;
@@ -276,7 +275,6 @@ function moveMe(x, y) {
 
 function getCurrentZone() {
     if (ZONES.SILENT.check(myX, myY)) return ZONES.SILENT;
-    if (ZONES.MEETING_AREA.check(myX, myY)) return ZONES.MEETING_AREA;
     return ZONES.LIVING;
 }
 
@@ -291,7 +289,7 @@ function showRoomModal(room) {
     
     document.getElementById('joinRoomBtn').onclick = () => {
         myRoomId = room.id;
-        // 部屋の中央付近へワープ
+        // 部屋の中央付近へワープ (重なり防止のランダム)
         myX = room.x + room.w/2 - 50 + Math.random()*100;
         myY = room.y + room.h/2 - 50 + Math.random()*100;
         
@@ -307,7 +305,7 @@ function closeRoomModal() { document.getElementById('room-modal').style.display 
 
 function leaveMeetingRoom() {
     myRoomId = null;
-    moveMe(1200, 800); // ソファへ
+    moveMe(1300, 900); // 退出後は右下のカフェ付近へ
     document.getElementById('leaveRoomBtn').style.display = 'none';
     document.getElementById('room-status').style.display = 'none';
     checkAudioStatus();
@@ -332,29 +330,37 @@ function draw() {
         ctx.fillStyle = "#000"; ctx.fillText("Loading Background...", 100, 100);
     }
 
-    // --- エリア判定の可視化（デバッグ用: 本番では透明度を0にしてもOK） ---
+    // --- エリア判定の可視化（濃い枠線に変更） ---
     
-    // 1. 会議室エリア（青っぽい枠）
+    // 1. 会議室エリア
     MEETING_ROOMS.forEach(r => {
-        // マウスオーバーっぽく薄く表示
-        ctx.fillStyle = "rgba(52, 152, 219, 0.1)"; 
+        // 中身は薄く
+        ctx.fillStyle = "rgba(41, 128, 185, 0.2)"; 
         ctx.fillRect(r.x, r.y, r.w, r.h);
-        // 枠線
-        ctx.strokeStyle = "rgba(52, 152, 219, 0.5)"; ctx.lineWidth = 2;
+        
+        // ★枠線を濃く太く
+        ctx.strokeStyle = "rgba(41, 128, 185, 0.9)"; 
+        ctx.lineWidth = 4; // 太く
         ctx.strokeRect(r.x, r.y, r.w, r.h);
+        
         // テキスト
-        ctx.fillStyle = "rgba(44, 62, 80, 0.7)"; ctx.font = "bold 24px sans-serif";
-        ctx.fillText(r.name, r.x + 30, r.y + 50);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)"; 
+        ctx.font = "bold 24px sans-serif";
+        ctx.fillText(r.name, r.x + 30, r.y + 40);
     });
 
-    // 2. 集中ブースエリア（赤っぽい枠）
-    // 範囲: x 750~1600, y 0~400
+    // 2. 集中ブースエリア (x:750~1600, y:0~450)
     ctx.fillStyle = "rgba(231, 76, 60, 0.1)";
-    ctx.fillRect(750, 0, 850, 400); // 1600-750 = 850 width
-    // テキスト
-    ctx.fillStyle = "rgba(192, 57, 43, 0.8)";
+    ctx.fillRect(750, 0, 850, 450); 
+    
+    // ★枠線を濃く太く
+    ctx.strokeStyle = "rgba(192, 57, 43, 0.9)";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(750, 0, 850, 450);
+
+    ctx.fillStyle = "rgba(192, 57, 43, 1)";
     ctx.font = "bold 20px sans-serif";
-    ctx.fillText("🚫 会話禁止 (Focus Zone)", 1050, 100);
+    ctx.fillText("🚫 会話禁止 (Focus Zone)", 1050, 60);
 
 
     // ユーザー描画
