@@ -12,6 +12,9 @@ let myRoomId = null;
 let isMicMutedByUser = true;
 let audioContext = null; 
 
+// ★現在のスピーカーIDを記憶する変数
+let currentSpeakerId = "";
+
 // ズーム設定
 let cameraScale = 1.0;
 const MIN_ZOOM = 0.4; 
@@ -114,6 +117,10 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
     initAudioContext();
 
     const micId = document.getElementById('micSelect').value;
+    
+    // ★入室時に選んだスピーカーIDを保存
+    currentSpeakerId = document.getElementById('speakerSelect').value;
+
     const constraints = { 
         audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
     };
@@ -147,7 +154,7 @@ function startConnection() {
 function loop() { draw(); requestAnimationFrame(loop); }
 
 // ============================
-// デバイス設定 & 適用処理 (機能強化)
+// デバイス設定 & 適用処理 (修正版)
 // ============================
 async function getDevices(mId, sId) {
     try {
@@ -165,12 +172,26 @@ async function getDevices(mId, sId) {
 function openSettings() { 
     // 設定画面を開くときに現在のデバイス一覧を取得
     getDevices('micSelectInGame', 'speakerSelectInGame').then(() => {
-        // 現在使用中のマイクを選択状態にする（簡易実装: ストリームからラベル一致などを探すのは複雑なので、とりあえずデフォルトor先頭になる）
+        
+        // ★修正ポイント: 現在のマイクを選択状態にする
+        if (myStream) {
+            const currentMicId = myStream.getAudioTracks()[0].getSettings().deviceId;
+            const micSelect = document.getElementById('micSelectInGame');
+            if (currentMicId) micSelect.value = currentMicId;
+        }
+
+        // ★修正ポイント: 現在のスピーカーを選択状態にする
+        const speakerSelect = document.getElementById('speakerSelectInGame');
+        if (currentSpeakerId) {
+            speakerSelect.value = currentSpeakerId;
+        }
+
         // マイクテストを開始
         const micSelect = document.getElementById('micSelectInGame');
         micSelect.onchange = () => startMicTest('micSelectInGame', 'mic-visualizer-bar-game');
         startMicTest('micSelectInGame', 'mic-visualizer-bar-game');
     });
+    
     document.getElementById('settings-modal').style.display = 'flex'; 
 }
 
@@ -178,7 +199,7 @@ function closeSettings() {
     document.getElementById('settings-modal').style.display = 'none'; 
 }
 
-// ★設定適用ボタンの処理
+// 設定適用ボタン
 async function applySettings() {
     const micId = document.getElementById('micSelectInGame').value;
     const spkId = document.getElementById('speakerSelectInGame').value;
@@ -194,9 +215,9 @@ async function applySettings() {
             if (myStream) myStream.getTracks().forEach(t => t.stop());
             
             myStream = newStream;
-            setMicState(!isMicMutedByUser); // 現在のミュート状態を適用
+            setMicState(!isMicMutedByUser); 
 
-            // ★重要: すでに通話中の相手に対して、送る音声を新しいマイクに切り替える
+            // 通話中の相手に対して音声を切り替える
             Object.values(peers).forEach(call => {
                 const sender = call.peerConnection.getSenders().find(s => s.track.kind === 'audio');
                 if (sender) {
@@ -211,8 +232,11 @@ async function applySettings() {
         }
     }
 
-    // 2. スピーカーの切り替え (Chrome等のみ対応)
+    // 2. スピーカーの切り替え
     if (spkId) {
+        // ★変更したスピーカーIDを保存
+        currentSpeakerId = spkId;
+
         document.querySelectorAll('audio').forEach(audio => {
             if (audio.setSinkId) audio.setSinkId(spkId).catch(e => {});
         });
@@ -223,20 +247,18 @@ async function applySettings() {
 
 function testSpeaker() {
     const AC = window.AudioContext || window.webkitAudioContext; const ctx = new AC(); const osc = ctx.createOscillator();
-    const spkId = document.getElementById('speakerSelect').value;
+    // ここはテスト音なので、入室前の選択ボックスの値を使う
+    const spkId = document.getElementById('speakerSelect').value; 
     if (spkId && ctx.setSinkId) ctx.setSinkId(spkId).catch(e=>{});
     osc.connect(ctx.destination); osc.frequency.value = 523.25; osc.start(); osc.stop(ctx.currentTime + 0.3);
 }
 
-// マイクテスト (共通化)
+// マイクテスト
 function startMicTest(selectId, barId) {
     const micId = document.getElementById(selectId).value; 
     if(!micId) return;
     
-    // テスト用の独立したストリームを取得（本番用ストリームとは別にする）
     navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } }).then(s => {
-        // 前のコンテキストがあれば閉じる（簡易実装）
-        // 実際はAudioContextは使い回すが、テスト用なので都度作成でOK
         const AC = window.AudioContext || window.webkitAudioContext; 
         const ctx = new AC(); 
         const src = ctx.createMediaStreamSource(s);
@@ -245,7 +267,6 @@ function startMicTest(selectId, barId) {
         const bar = document.getElementById(barId);
         
         const upd = () => { 
-            // モーダルが閉じたら停止（ストリームも止めるべきだが簡易版）
             const modal1 = document.getElementById('entry-modal');
             const modal2 = document.getElementById('settings-modal');
             if(modal1.style.display==='none' && modal2.style.display==='none') {
@@ -373,8 +394,10 @@ function handleStream(call) {
         audio.srcObject = remoteStream;
         audio.autoplay = true; 
         audio.playsInline = true;
-        const spkId = document.getElementById('speakerSelectInGame').value;
-        if(spkId && audio.setSinkId) audio.setSinkId(spkId).catch(e=>{});
+        
+        // ★現在のスピーカー設定を適用
+        if(currentSpeakerId && audio.setSinkId) audio.setSinkId(currentSpeakerId).catch(e=>{});
+        
         audio.volume = 0; audio.muted = true;
         document.body.appendChild(audio);
     });
