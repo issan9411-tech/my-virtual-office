@@ -2,10 +2,10 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Render Virtual Office</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Virtual Office</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: sans-serif; background: #222; }
+        body { margin: 0; overflow: hidden; font-family: sans-serif; background: #222; user-select: none; }
         
         /* 入室オーバーレイ */
         #overlay {
@@ -13,33 +13,45 @@
             background: rgba(0,0,0,0.9); display: flex; justify-content: center; align-items: center; 
             z-index: 100; color: white; flex-direction: column;
         }
+        input { padding: 10px; font-size: 18px; margin: 10px 0; width: 250px; text-align: center; }
         .big-btn { 
-            padding: 20px 40px; font-size: 24px; cursor: pointer; 
-            background: #4CAF50; color: white; border: none; border-radius: 8px; margin-top: 20px; 
+            padding: 15px 40px; font-size: 20px; cursor: pointer; 
+            background: #4CAF50; color: white; border: none; border-radius: 8px; margin-top: 10px; 
         }
 
-        /* 画面下の操作バー */
+        /* 下部操作バー */
         #controls-bar {
-            position: absolute; bottom: 0; left: 0; width: 100%; height: 80px;
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 70px;
             background: rgba(30, 30, 30, 0.9); display: flex; justify-content: center; align-items: center;
-            gap: 20px; z-index: 50; border-top: 1px solid #555;
+            gap: 15px; z-index: 50; border-top: 1px solid #555;
         }
-        .ctrl-btn {
-            padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold;
-        }
-        #micBtn { background: #e74c3c; color: white; width: 180px; } /* デフォルト赤（OFF） */
+        .ctrl-btn { padding: 8px 16px; font-size: 14px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; }
+        #micBtn { background: #e74c3c; color: white; width: 140px; }
         #settingsBtn { background: #555; color: white; }
+
+        /* スマホ用十字キー (D-pad) */
+        #d-pad {
+            display: none; /* PCでは非表示、JSでスマホ判定して表示 */
+            position: absolute; bottom: 90px; right: 20px; width: 120px; height: 120px; z-index: 60;
+        }
+        .d-btn {
+            position: absolute; width: 40px; height: 40px; background: rgba(255, 255, 255, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 50%;
+            display: flex; justify-content: center; align-items: center; color: white; font-weight: bold;
+            touch-action: none; user-select: none;
+        }
+        .d-btn:active { background: rgba(255, 255, 255, 0.6); }
+        #d-up { top: 0; left: 40px; }
+        #d-down { bottom: 0; left: 40px; }
+        #d-left { top: 40px; left: 0; }
+        #d-right { top: 40px; right: 0; }
 
         /* 設定モーダル */
         #settings-modal {
             display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: white; padding: 20px; border-radius: 8px; z-index: 200; width: 300px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
         }
-        #settings-modal h3 { margin-top: 0; }
         select { width: 100%; padding: 8px; margin-bottom: 15px; }
-        .close-btn { background: #333; color: white; width: 100%; padding: 10px; border: none; cursor: pointer; }
-
         #status { position: absolute; top: 10px; left: 10px; padding: 10px; background: rgba(255,255,255,0.9); border-radius: 4px; z-index: 10; font-weight: bold; }
     </style>
 </head>
@@ -47,29 +59,31 @@
 
     <div id="overlay">
         <h1>バーチャルオフィス</h1>
-        <p>※マイク・スピーカーを設定して入室してください</p>
+        <p>お名前を入力して入室してください</p>
+        <input type="text" id="username" placeholder="名前 (例: 田中)" maxlength="10">
         <button id="startBtn" class="big-btn">入室する</button>
-        <div id="error-msg" style="color:#ff6b6b; margin-top:10px;"></div>
     </div>
 
-    <div id="status">初期化中...</div>
-
+    <div id="status">準備中...</div>
     <canvas id="gameCanvas"></canvas>
+
+    <div id="d-pad">
+        <div id="d-up" class="d-btn">↑</div>
+        <div id="d-down" class="d-btn">↓</div>
+        <div id="d-left" class="d-btn">←</div>
+        <div id="d-right" class="d-btn">→</div>
+    </div>
 
     <div id="controls-bar">
         <button id="micBtn" class="ctrl-btn" onclick="toggleMic()">マイクOFF</button>
-        <button id="settingsBtn" class="ctrl-btn" onclick="openSettings()">設定 ⚙️</button>
+        <button id="settingsBtn" class="ctrl-btn" onclick="openSettings()">設定</button>
     </div>
 
     <div id="settings-modal">
         <h3>デバイス設定</h3>
-        <label>マイク入力</label>
-        <select id="micSelect"></select>
-        
-        <label>スピーカー出力</label>
-        <select id="speakerSelect"></select>
-        
-        <button class="close-btn" onclick="closeSettings()">閉じる</button>
+        <label>マイク</label><select id="micSelect"></select>
+        <label>スピーカー</label><select id="speakerSelect"></select>
+        <button onclick="closeSettings()" style="width:100%; padding:10px;">閉じる</button>
     </div>
 
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>

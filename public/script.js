@@ -1,93 +1,73 @@
-// グローバル変数
 let socket = null, myPeer = null, myStream = null;
 let users = {}, peers = {};
 let myId = null, myX = 50, myY = 200;
-let currentMicId = 'default';
-let isMicMutedByUser = true; // ユーザーが意図的にミュートしているか
+let myName = "ゲスト";
+let isMicMutedByUser = true;
+let isDragging = false; // ドラッグ中かどうか
 
-// DOM要素
+// スマホ判定
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const statusDiv = document.getElementById('status');
 const micBtn = document.getElementById('micBtn');
 
-// エリア定義
-const ZONES = {
-    WORK: { name: "作業エリア (会話禁止)", x: 0, w: 400, color: "#e0e0e0", allowMic: false },
-    LIVING: { name: "リビング (会話OK)", x: 400, w: 400, color: "#b2fab4", allowMic: true },
-    MEETING: { name: "会議室 (全員)", x: 800, w: 2000, color: "#b3cde0", allowMic: true }
-};
-
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// ----------------------
-// 初期化 & デバイス取得
-// ----------------------
+const ZONES = {
+    WORK: { name: "作業 (無言)", x: 0, w: 400, color: "#e0e0e0", allowMic: false },
+    LIVING: { name: "リビング (会話)", x: 400, w: 400, color: "#b2fab4", allowMic: true },
+    MEETING: { name: "会議 (全員)", x: 800, w: 3000, color: "#b3cde0", allowMic: true }
+};
+
 window.addEventListener('load', async () => {
-    const startBtn = document.getElementById('startBtn');
-    if (!startBtn) return;
-
-    // デバイス一覧を取得してプルダウンにセット
+    // スマホならコントローラーを表示
+    if (isMobile) {
+        document.getElementById('d-pad').style.display = 'block';
+    }
     await getDevices();
-
-    startBtn.addEventListener('click', () => {
-        initGame();
-    });
+    document.getElementById('startBtn').addEventListener('click', initGame);
 });
 
+// デバイス取得（変更なし）
 async function getDevices() {
     try {
-        // 許可を求めるために一度ストリームを取得（すぐ止める）
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach(t => t.stop());
-
         const devices = await navigator.mediaDevices.enumerateDevices();
         const micSelect = document.getElementById('micSelect');
         const spkSelect = document.getElementById('speakerSelect');
-
-        micSelect.innerHTML = '';
-        spkSelect.innerHTML = '';
-
+        micSelect.innerHTML = ''; spkSelect.innerHTML = '';
         devices.forEach(d => {
-            const option = document.createElement('option');
-            option.value = d.deviceId;
-            option.text = d.label || `${d.kind} - ${d.deviceId.substr(0,5)}`;
-            
-            if (d.kind === 'audioinput') micSelect.appendChild(option);
-            if (d.kind === 'audiooutput') spkSelect.appendChild(option);
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.text = d.label || d.kind;
+            if (d.kind === 'audioinput') micSelect.appendChild(opt);
+            if (d.kind === 'audiooutput') spkSelect.appendChild(opt);
         });
-
-    } catch (e) {
-        console.error("デバイス取得エラー", e);
-    }
+    } catch(e) { console.error(e); }
 }
 
-// ----------------------
-// ゲーム開始
-// ----------------------
 function initGame() {
+    const nameInput = document.getElementById('username');
+    if (!nameInput.value) { alert("名前を入力してください"); return; }
+    myName = nameInput.value;
+
     const startBtn = document.getElementById('startBtn');
-    startBtn.innerText = "接続中...";
     startBtn.disabled = true;
+    startBtn.innerText = "接続中...";
 
-    // 選択されたマイクを取得
     const micId = document.getElementById('micSelect').value;
-    currentMicId = micId;
-
-    const constraints = {
-        audio: { deviceId: micId ? { exact: micId } : undefined }
-    };
-
-    navigator.mediaDevices.getUserMedia(constraints)
+    navigator.mediaDevices.getUserMedia({ audio: { deviceId: micId ? { exact: micId } : undefined } })
         .then(stream => {
             myStream = stream;
-            // 初期状態はミュート
             setMicState(false);
             startConnection();
         })
         .catch(err => {
-            alert("マイクが取得できませんでした: " + err);
+            alert("マイクエラー: " + err);
             startBtn.disabled = false;
         });
 }
@@ -107,71 +87,110 @@ function startConnection() {
     });
 
     myPeer = new Peer();
-    myPeer.on('open', id => socket.emit('joinVoice', id));
-    
+    myPeer.on('open', id => {
+        // 名前とPeerIDをサーバーへ送る
+        socket.emit('enterRoom', { name: myName, peerId: id });
+    });
+
     myPeer.on('call', call => {
         call.answer(myStream);
         handleStream(call);
     });
 
-    // 初期描画
     checkZone();
     draw();
 }
 
 // ----------------------
-// マイク & エリア制御
+// マウス・タッチ操作の実装
 // ----------------------
 
-// エリア判定とボタン制御
+// 1. ダブルクリックで瞬間移動
+canvas.addEventListener('dblclick', (e) => {
+    moveMe(e.clientX, e.clientY);
+});
+
+// 2. ドラッグ＆ドロップ移動 (PC)
+canvas.addEventListener('mousedown', (e) => {
+    // 自分のアバターをクリックしたか判定 (半径30px以内)
+    const dist = Math.sqrt((e.clientX - myX)**2 + (e.clientY - myY)**2);
+    if (dist < 30) isDragging = true;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (isDragging) {
+        moveMe(e.clientX, e.clientY);
+    }
+});
+
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+
+// 3. スマホ用コントローラー (タッチイベント)
+const speed = 15;
+const setupBtn = (id, dx, dy) => {
+    const btn = document.getElementById(id);
+    let interval;
+    btn.addEventListener('touchstart', (e) => {
+        e.preventDefault(); // スクロール防止
+        interval = setInterval(() => {
+            moveMe(myX + dx, myY + dy);
+        }, 50);
+    });
+    btn.addEventListener('touchend', () => clearInterval(interval));
+};
+
+setupBtn('d-up', 0, -speed);
+setupBtn('d-down', 0, speed);
+setupBtn('d-left', -speed, 0);
+setupBtn('d-right', speed, 0);
+
+
+// 移動共通処理
+function moveMe(x, y) {
+    if (!socket) return;
+    myX = x;
+    myY = y;
+    socket.emit('move', { x: myX, y: myY });
+    checkZone();
+    draw();
+}
+
+
+// ----------------------
+// その他ロジック (前回同様)
+// ----------------------
 function checkZone() {
     const zone = getZone(myX);
-    
-    // エリアが変わったときのボタン制御
     if (!zone.allowMic) {
-        // 強制オフエリア
         micBtn.disabled = true;
-        micBtn.innerText = "🚫 会話禁止エリア";
+        micBtn.innerText = "🚫 会話禁止";
         micBtn.style.background = "#555";
-        setMicState(false); // 強制ミュート
+        setMicState(false);
     } else {
-        // 会話可能エリア
         micBtn.disabled = false;
-        // ユーザーが意図的にONにしていればON、そうでなければOFF
         updateMicBtnDesign();
         setMicState(!isMicMutedByUser);
     }
-
-    statusDiv.innerText = `現在地: ${zone.name}`;
+    statusDiv.innerText = `場所: ${zone.name}`;
 }
 
-// マイクの物理的なON/OFF
 function setMicState(isOn) {
-    if (!myStream) return;
-    const track = myStream.getAudioTracks()[0];
-    if(track) track.enabled = isOn;
+    if (myStream) myStream.getAudioTracks()[0].enabled = isOn;
 }
 
-// ユーザーがボタンを押したとき
 function toggleMic() {
-    isMicMutedByUser = !isMicMutedByUser; // フラグを反転
+    isMicMutedByUser = !isMicMutedByUser;
     updateMicBtnDesign();
-    
-    // 現在のエリア設定に合わせて反映
-    const zone = getZone(myX);
-    if (zone.allowMic) {
-        setMicState(!isMicMutedByUser);
-    }
+    checkZone(); // 再適用
 }
 
-// ボタンのデザイン更新
 function updateMicBtnDesign() {
     if (isMicMutedByUser) {
         micBtn.innerText = "マイクOFF";
-        micBtn.style.background = "#e74c3c"; // 赤
+        micBtn.style.background = "#e74c3c";
     } else {
         micBtn.innerText = "マイクON 🎙️";
-        micBtn.style.background = "#4CAF50"; // 緑
+        micBtn.style.background = "#4CAF50";
     }
 }
 
@@ -181,47 +200,25 @@ function getZone(x) {
     return ZONES.MEETING;
 }
 
-// ----------------------
-// 設定 & スピーカー
-// ----------------------
-function openSettings() {
-    document.getElementById('settings-modal').style.display = 'block';
-}
-
-function closeSettings() {
+// 設定画面
+function openSettings() { document.getElementById('settings-modal').style.display = 'block'; }
+function closeSettings() { 
     document.getElementById('settings-modal').style.display = 'none';
-    
-    // スピーカー変更の適用 (Chrome/Edgeのみ対応)
-    const speakerId = document.getElementById('speakerSelect').value;
-    if (speakerId) {
-        document.querySelectorAll('audio').forEach(audio => {
-            if (audio.setSinkId) {
-                audio.setSinkId(speakerId).catch(e => console.warn("スピーカー変更不可", e));
-            }
-        });
-    }
-
-    // ※マイクの変更はリロードが必要なため、今回はスピーカーのみ即時反映としています
+    const spkId = document.getElementById('speakerSelect').value;
+    document.querySelectorAll('audio').forEach(a => {
+        if(a.setSinkId) a.setSinkId(spkId).catch(e=>console.log(e));
+    });
 }
 
-
-// ----------------------
-// 音声接続 & 描画（前回とほぼ同じ）
-// ----------------------
 function handleStream(call) {
     call.on('stream', userAudio => {
         if (document.getElementById(call.peer)) return;
         const audio = document.createElement('audio');
         audio.id = call.peer;
         audio.srcObject = userAudio;
-        
-        // スピーカー設定の適用
-        const speakerId = document.getElementById('speakerSelect').value;
-        if (speakerId && audio.setSinkId) {
-            audio.setSinkId(speakerId);
-        }
-
-        audio.play().catch(e => console.log(e));
+        const spkId = document.getElementById('speakerSelect').value;
+        if(spkId && audio.setSinkId) audio.setSinkId(spkId);
+        audio.play().catch(e=>console.log(e));
         document.body.appendChild(audio);
     });
     call.on('close', () => {
@@ -233,15 +230,12 @@ function handleStream(call) {
 function connectToUsers() {
     if (!myPeer || !myStream) return;
     const myZone = getZone(myX);
-    
-    // 自分が会話禁止エリアなら接続処理もしない
-    if (!myZone.allowMic) return; 
+    if (!myZone.allowMic) return;
 
     Object.keys(users).forEach(id => {
         if (id === myId) return;
         const u = users[id];
         const userZone = getZone(u.x);
-        
         if (u.peerId && userZone.allowMic && !peers[id]) {
             const call = myPeer.call(u.peerId, myStream);
             peers[id] = call;
@@ -250,17 +244,13 @@ function connectToUsers() {
     });
 }
 
+// PC矢印キーも残す
 document.addEventListener('keydown', e => {
-    if (!socket) return;
-    const step = 15;
-    if (e.key === 'ArrowUp') myY -= step;
-    if (e.key === 'ArrowDown') myY += step;
-    if (e.key === 'ArrowLeft') myX -= step;
-    if (e.key === 'ArrowRight') myX += step;
-    socket.emit('move', { x: myX, y: myY });
-    
-    checkZone();
-    draw();
+    const s = 15;
+    if (e.key === 'ArrowUp') moveMe(myX, myY - s);
+    if (e.key === 'ArrowDown') moveMe(myX, myY + s);
+    if (e.key === 'ArrowLeft') moveMe(myX - s, myY);
+    if (e.key === 'ArrowRight') moveMe(myX + s, myY);
 });
 
 function draw() {
@@ -272,11 +262,20 @@ function draw() {
         ctx.font = "bold 20px sans-serif";
         ctx.fillText(z.name, z.x + 20, 50);
     });
+
     Object.keys(users).forEach(id => {
         const u = users[id];
+        // 本体
         ctx.fillStyle = (id === myId) ? '#e74c3c' : '#3498db';
         ctx.beginPath();
         ctx.arc(u.x, u.y, 20, 0, Math.PI * 2);
         ctx.fill();
+        
+        // 名前表示
+        ctx.fillStyle = "black";
+        ctx.font = "bold 14px sans-serif";
+        ctx.textAlign = "center";
+        // 名前がない場合は "..." と表示
+        ctx.fillText(u.name || "...", u.x, u.y - 30);
     });
 }
