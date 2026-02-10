@@ -1,4 +1,31 @@
-const socket = io();
+// ページが完全に読み込まれてから実行
+window.addEventListener('load', () => {
+    const startBtn = document.getElementById('startBtn');
+    const errorMsg = document.getElementById('error-msg');
+    
+    // ライブラリが正しく読み込まれたかチェック
+    if (typeof io === 'undefined' || typeof Peer === 'undefined') {
+        errorMsg.innerText = "エラー: ライブラリの読み込みに失敗しました。再読み込みしてください。";
+        startBtn.disabled = true;
+        return;
+    }
+
+    // ボタンにクリックイベントを設定
+    startBtn.addEventListener('click', () => {
+        initGame();
+    });
+});
+
+// グローバル変数
+let socket = null;
+let myPeer = null;
+let myStream = null;
+let users = {};
+let peers = {};
+let myId = null;
+let myX = 50, myY = 200;
+
+// キャンバス設定
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const statusDiv = document.getElementById('status');
@@ -6,80 +33,90 @@ const statusDiv = document.getElementById('status');
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-let myId = null;
-let myX = 50;
-let myY = 200;
-let users = {};
-let myStream = null;
-let myPeer = null;
-let peers = {}; 
-
 // エリア定義
 const ZONES = {
-  WORK: { name: "作業エリア (静寂)", x: 0, w: 400, color: "#e0e0e0", mic: false },
-  LIVING: { name: "リビング (会話)", x: 400, w: 400, color: "#b2fab4", mic: true },
-  MEETING: { name: "会議室 (全員)", x: 800, w: 1200, color: "#b3cde0", mic: true }
+    WORK: { name: "作業エリア (静寂)", x: 0, w: 400, color: "#e0e0e0", mic: false },
+    LIVING: { name: "リビング (会話)", x: 400, w: 400, color: "#b2fab4", mic: true },
+    MEETING: { name: "会議室 (全員)", x: 800, w: 1200, color: "#b3cde0", mic: true }
 };
 
+// ゲーム開始処理
 function initGame() {
-    document.getElementById('overlay').style.display = 'none';
-    
-    // マイク取得
-    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(stream => {
-        myStream = stream;
-        
-        // PeerJSサーバーは公式の無料クラウドを利用 (設定不要)
-        myPeer = new Peer();
+    const startBtn = document.getElementById('startBtn');
+    startBtn.innerText = "接続中...";
+    startBtn.disabled = true;
 
-        myPeer.on('open', id => {
-            socket.emit('joinVoice', id);
+    // マイクの取得を試みる
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("エラー: このブラウザまたは環境（http）ではマイクが使えません。httpsでアクセスしてください。");
+        startBtn.innerText = "入室失敗";
+        return;
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: false, audio: true })
+        .then(stream => {
+            myStream = stream;
+            startConnection(); // マイクOKならサーバー接続へ
+        })
+        .catch(err => {
+            console.error(err);
+            alert("マイクの許可が必要です。\nブラウザの設定を確認してリロードしてください。");
+            startBtn.innerText = "入室する";
+            startBtn.disabled = false;
         });
+}
 
-        myPeer.on('call', call => {
-            call.answer(myStream);
-            handleStream(call);
-        });
+// サーバー接続処理
+function startConnection() {
+    // Socket.io接続
+    socket = io();
 
-        checkZone(); 
-    }).catch(e => {
-        alert("マイクエラー: " + e);
+    socket.on('connect', () => {
+        myId = socket.id;
+        document.getElementById('overlay').style.display = 'none'; // オーバーレイを消す
+        statusDiv.innerText = "接続完了！";
     });
+
+    socket.on('updateUsers', (data) => {
+        users = data;
+        draw();
+        connectToUsers();
+    });
+
+    // PeerJS接続
+    myPeer = new Peer();
+    
+    myPeer.on('open', id => {
+        if(socket) socket.emit('joinVoice', id);
+    });
+
+    myPeer.on('call', call => {
+        call.answer(myStream);
+        handleStream(call);
+    });
+    
+    // エリアチェック開始
+    checkZone();
 }
 
 function handleStream(call) {
     call.on('stream', userAudio => {
-        // すでに音声タグがあれば作らない
-        if(document.getElementById(call.peer)) return;
-        
+        if (document.getElementById(call.peer)) return;
         const audio = document.createElement('audio');
-        audio.id = call.peer; // ID管理
+        audio.id = call.peer;
         audio.srcObject = userAudio;
-        audio.play();
+        audio.play().catch(e => console.log("自動再生ブロック:", e));
     });
 }
 
-socket.on('connect', () => {
-    myId = socket.id;
-});
-
-socket.on('updateUsers', (data) => {
-    users = data;
-    draw();
-    connectToUsers();
-});
-
 function connectToUsers() {
     if (!myPeer || !myStream) return;
-    
-    // 自分が会話可能エリアにいるか？
     const myZone = getZone(myX);
-    if (!myZone.mic) return; // 自分は黙る
+    if (!myZone.mic) return; 
 
     Object.keys(users).forEach(id => {
         if (id === myId) return;
         const u = users[id];
-        
-        // 相手も会話可能エリアにいるなら接続
         const userZone = getZone(u.x);
         
         if (u.peerId && userZone.mic && !peers[id]) {
@@ -96,8 +133,9 @@ function getZone(x) {
     return ZONES.MEETING;
 }
 
-// 移動操作
+// キー操作
 document.addEventListener('keydown', e => {
+    if(!socket) return;
     const step = 15;
     if (e.key === 'ArrowUp') myY -= step;
     if (e.key === 'ArrowDown') myY += step;
@@ -111,15 +149,16 @@ function checkZone() {
     if (!myStream) return;
     const zone = getZone(myX);
     
-    // マイクのON/OFF切り替え
-    myStream.getAudioTracks()[0].enabled = zone.mic;
+    // マイク切り替え
+    const track = myStream.getAudioTracks()[0];
+    if(track) track.enabled = zone.mic;
+    
     statusDiv.innerText = `エリア: ${zone.name} | マイク: ${zone.mic ? 'ON' : 'OFF'}`;
 }
 
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // 背景
     [ZONES.WORK, ZONES.LIVING, ZONES.MEETING].forEach(z => {
         ctx.fillStyle = z.color;
         ctx.fillRect(z.x, 0, z.w, canvas.height);
@@ -128,7 +167,6 @@ function draw() {
         ctx.fillText(z.name, z.x + 20, 50);
     });
 
-    // ユーザー
     Object.keys(users).forEach(id => {
         const u = users[id];
         ctx.fillStyle = (id === myId) ? '#e74c3c' : '#3498db';
