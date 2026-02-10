@@ -12,10 +12,10 @@ let myRoomId = null;
 let isMicMutedByUser = true;
 let audioContext = null; 
 
-// ★ズーム設定
+// ズーム設定
 let cameraScale = 1.0;
-const MIN_ZOOM = 0.4; // 最小ズーム（引き）
-const MAX_ZOOM = 2.0; // 最大ズーム（寄り）
+const MIN_ZOOM = 0.4; 
+const MAX_ZOOM = 2.0; 
 
 // 背景画像
 const bgImage = new Image();
@@ -24,21 +24,28 @@ bgImage.src = "bg.jpg";
 const WORLD_W = 2000;
 const WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-// ★会話可能距離 (アバター約3人分)
 const TALK_DISTANCE = 120; 
 
-// 会議室データ
+// ============================
+// ★エリア・座標設定 (調整版)
+// ============================
 const MEETING_ROOMS = [
-    { id: 'A', name: '大会議室 (ガラス張り)', type: 'rect', x: 40, y: 180, w: 680, h: 800, capacity: 10 },
-    { id: 'B', name: 'ソファ席 (会議室B)', type: 'rect', x: 820, y: 550, w: 500, h: 450, capacity: 6 }
+    { 
+        id: 'A', name: '大会議室 (ガラス張り)', type: 'rect', 
+        x: 40, y: 180, w: 680, h: 800, capacity: 10 
+    },
+    { 
+        id: 'B', name: 'ソファ席 (会議室B)', type: 'rect', 
+        // ★右側の枠を少し狭くしました (幅500 -> 420)
+        x: 820, y: 550, w: 420, h: 450, capacity: 6 
+    }
 ];
 
-// エリア定義
 const ZONES = {
     SILENT: { 
         name: "集中ブース (会話禁止)", 
-        check: (x, y) => (x > 750 && x < 1600 && y < 450), 
+        // ★右側の枠を少し狭くしました (x < 1600 -> x < 1450)
+        check: (x, y) => (x > 750 && x < 1450 && y < 450), 
         allowMic: false 
     },
     LIVING: { 
@@ -53,7 +60,7 @@ const ctx = canvas.getContext('2d');
 const micBtn = document.getElementById('micBtn');
 
 // ============================
-// 1. セットアップ & イベント
+// セットアップ
 // ============================
 window.addEventListener('load', () => {
     canvas.width = window.innerWidth;
@@ -61,7 +68,6 @@ window.addEventListener('load', () => {
     if (isMobile) document.getElementById('d-pad').style.display = 'block';
 });
 
-// ズーム操作 (マウスホイール)
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.1 : 0.1;
@@ -71,50 +77,32 @@ canvas.addEventListener('wheel', (e) => {
 function changeZoom(delta) {
     cameraScale += delta;
     cameraScale = Math.max(MIN_ZOOM, Math.min(cameraScale, MAX_ZOOM));
-    draw(); // 即座に再描画
+    draw();
 }
 
-// 最初のタップスタート
 async function startSetup() {
-    // AudioContextを作成・再開
     initAudioContext();
-    
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(t => t.stop()); // 許可だけ取って一旦止める
-        
+        stream.getTracks().forEach(t => t.stop());
         await getDevices('micSelect', 'speakerSelect');
         document.getElementById('start-overlay').style.display = 'none';
         document.getElementById('entry-modal').style.display = 'flex';
-        
-        // テスト開始
-        const micSelect = document.getElementById('micSelect');
-        micSelect.addEventListener('change', startMicTest);
+        document.getElementById('micSelect').addEventListener('change', startMicTest);
         startMicTest();
-
     } catch (err) {
         alert("マイクの使用を許可してください。");
     }
 }
 
-// ★重要: オーディオエンジンを確実に起動する関数
 function initAudioContext() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    
-    if (!audioContext) {
-        audioContext = new AC();
-    }
-    
-    // 状態が停止中なら再開させる（iOS対策）
-    if (audioContext.state === 'suspended') {
-        audioContext.resume();
-    }
-
-    // 無音を再生してエンジンを温める
+    if (!audioContext) audioContext = new AC();
+    if (audioContext.state === 'suspended') audioContext.resume();
     const osc = audioContext.createOscillator();
     const gain = audioContext.createGain();
-    gain.gain.value = 0; // 無音
+    gain.gain.value = 0;
     osc.connect(gain);
     gain.connect(audioContext.destination);
     osc.start(0);
@@ -129,20 +117,11 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
     if (!nameInput.value) { alert("名前を入力してください"); return; }
     myName = nameInput.value;
     document.getElementById('entry-modal').style.display = 'none';
-    
-    // ここでも念のためオーディオ再開
     initAudioContext();
 
     const micId = document.getElementById('micSelect').value;
-    
-    // ★マイク取得オプションの最適化
     const constraints = { 
-        audio: { 
-            deviceId: micId ? { exact: micId } : undefined,
-            echoCancellation: true, // エコーキャンセル
-            noiseSuppression: true, // ノイズ除去
-            autoGainControl: true   // 自動音量調整
-        } 
+        audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
     };
 
     navigator.mediaDevices.getUserMedia(constraints)
@@ -157,11 +136,7 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
 function startConnection() {
     socket = io();
     socket.on('connect', () => { myId = socket.id; });
-    
-    socket.on('updateUsers', (data) => { 
-        users = data; 
-        updateVolumes(); 
-    });
+    socket.on('updateUsers', (data) => { users = data; updateVolumes(); });
     
     myPeer = new Peer();
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
@@ -171,11 +146,8 @@ function startConnection() {
         handleStream(call);
     });
 
-    // 接続チェック (1.5秒ごと)
     setInterval(connectToUsers, 1500);
-    // 音量チェック (0.5秒ごと)
     setInterval(updateVolumes, 500);
-
     loop();
 }
 
@@ -221,7 +193,7 @@ function updateMicBtn(enabled, text) {
 }
 
 // ============================
-// 接続管理 (間引き処理)
+// 接続管理
 // ============================
 function connectToUsers() {
     if (!myPeer || !myStream || !myId) return;
@@ -235,15 +207,11 @@ function connectToUsers() {
         let shouldConnect = false;
 
         if (myRoomId) {
-            // 会議室: 同じ部屋IDの人
             if (u.roomId === myRoomId) shouldConnect = true;
         } else {
-            // リビング: お互い部屋なし
             if (!u.roomId) {
                 const uZoneIsSilent = ZONES.SILENT.check(u.x, u.y);
-                if (myZone.allowMic && !uZoneIsSilent) {
-                    shouldConnect = true;
-                }
+                if (myZone.allowMic && !uZoneIsSilent) shouldConnect = true;
             }
         }
 
@@ -265,9 +233,6 @@ function connectToUsers() {
     });
 }
 
-// ============================
-// 音量制御
-// ============================
 function updateVolumes() {
     Object.keys(users).forEach(targetId => {
         if (targetId === myId) return;
@@ -278,24 +243,16 @@ function updateVolumes() {
 
         let volume = 0;
         if (myRoomId) {
-            // 会議室: 全員聞こえる
             if (u.roomId === myRoomId) volume = 1.0;
         } else {
-            // リビング: 距離計算
             if (!u.roomId) {
                 const dist = Math.sqrt((myX - u.x)**2 + (myY - u.y)**2);
                 if (dist <= TALK_DISTANCE) volume = 1.0;
                 else volume = 0;
             }
         }
-
-        // スマホ対策: volumeプロパティではなくmutedで制御
-        if (volume <= 0.01) {
-            audioEl.muted = true;
-        } else {
-            audioEl.muted = false;
-            audioEl.volume = volume;
-        }
+        if (volume <= 0.01) audioEl.muted = true;
+        else { audioEl.muted = false; audioEl.volume = volume; }
     });
 }
 
@@ -306,13 +263,10 @@ function handleStream(call) {
         audio.id = "audio-" + call.peer;
         audio.srcObject = remoteStream;
         audio.autoplay = true; 
-        audio.playsInline = true; // iOS必須
-        
+        audio.playsInline = true;
         const spkId = document.getElementById('speakerSelectInGame').value;
         if(spkId && audio.setSinkId) audio.setSinkId(spkId).catch(e=>{});
-        
-        audio.volume = 0; 
-        audio.muted = true;
+        audio.volume = 0; audio.muted = true;
         document.body.appendChild(audio);
     });
     call.on('close', () => { removeAudio(call.peer); delete peers[call.peer]; });
@@ -361,16 +315,12 @@ function showRoomModal(room) {
     document.getElementById('room-info').innerText = `定員: ${count}/${room.capacity}`;
     document.getElementById('room-modal').style.display = 'flex';
     
-    // ★修正: ボタンクリックイベントを一旦リセットしてから登録（重複防止）
     const joinBtn = document.getElementById('joinRoomBtn');
-    // クローンしてリスナー削除の代わりにする
     const newBtn = joinBtn.cloneNode(true);
     joinBtn.parentNode.replaceChild(newBtn, joinBtn);
 
     newBtn.onclick = async () => {
-        // ★重要: 会議室入室ボタンを押した瞬間もオーディオを叩き起こす
         initAudioContext();
-        
         myRoomId = room.id;
         myX = room.x + room.w/2 - 50 + Math.random()*100;
         myY = room.y + room.h/2 - 50 + Math.random()*100;
@@ -379,10 +329,7 @@ function showRoomModal(room) {
         document.getElementById('room-modal').style.display = 'none';
         document.getElementById('leaveRoomBtn').style.display = 'block';
         document.getElementById('room-status').style.display = 'block';
-        
-        // 念の為マイクを再有効化
         if(myStream) myStream.getAudioTracks().forEach(t => t.enabled = true);
-        
         checkAudioStatus();
     };
 }
@@ -424,16 +371,19 @@ function draw() {
         ctx.fillStyle = "#eee"; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     }
 
+    // 会議室枠線
     MEETING_ROOMS.forEach(r => {
         ctx.fillStyle = "rgba(41, 128, 185, 0.2)"; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.strokeStyle = "rgba(41, 128, 185, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = "rgba(0, 0, 0, 0.7)"; ctx.font = "bold 24px sans-serif"; ctx.fillText(r.name, r.x + 30, r.y + 40);
     });
 
-    ctx.fillStyle = "rgba(231, 76, 60, 0.1)"; ctx.fillRect(750, 0, 850, 450); 
-    ctx.strokeStyle = "rgba(192, 57, 43, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(750, 0, 850, 450);
-    ctx.fillStyle = "rgba(192, 57, 43, 1)"; ctx.font = "bold 20px sans-serif"; ctx.fillText("🚫 会話禁止 (Focus Zone)", 1050, 60);
+    // 禁止エリア (右側を1450まで縮小)
+    ctx.fillStyle = "rgba(231, 76, 60, 0.1)"; ctx.fillRect(750, 0, 700, 450); 
+    ctx.strokeStyle = "rgba(192, 57, 43, 0.9)"; ctx.lineWidth = 4; ctx.strokeRect(750, 0, 700, 450);
+    ctx.fillStyle = "rgba(192, 57, 43, 1)"; ctx.font = "bold 20px sans-serif"; ctx.fillText("🚫 会話禁止 (Focus Zone)", 900, 60);
 
+    // 会話範囲
     if (!myRoomId && getCurrentZone() === ZONES.LIVING) {
         ctx.beginPath();
         ctx.arc(myX, myY, TALK_DISTANCE, 0, Math.PI * 2);
