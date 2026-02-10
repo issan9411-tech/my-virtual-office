@@ -8,13 +8,12 @@ let myX = 100, myY = 300;
 let myName = "ゲスト";
 let myRoomId = null; 
 let isMicMutedByUser = true;
-let audioContext = null; // 音声テスト用
+let audioContext = null; 
 
 const WORLD_W = 2000;
 const WORLD_H = 1500;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-// 会議室データ
 const MEETING_ROOMS = [
     { id: 'A', name: '会議室A', type: 'rect', x: 1200, y: 100, w: 300, h: 300, capacity: 2 },
     { id: 'B', name: '会議室B', type: 'circle', x: 1400, y: 600, r: 180, capacity: 4 }
@@ -25,105 +24,142 @@ const ctx = canvas.getContext('2d');
 const micBtn = document.getElementById('micBtn');
 
 // ============================
-// 初期化 & 音声テスト
+// 1. セットアップ開始 (スマホ対策)
 // ============================
-window.addEventListener('load', async () => {
+window.addEventListener('load', () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     if (isMobile) document.getElementById('d-pad').style.display = 'block';
-
-    // マイク・スピーカー一覧取得
-    await getDevices('micSelect', 'speakerSelect');
-    
-    // マイク選択変更時にテスト用ビジュアライザーを起動
-    document.getElementById('micSelect').addEventListener('change', startMicTest);
-    startMicTest(); // 初期起動
-
-    document.getElementById('startBtn').addEventListener('click', initGame);
 });
 
-// スピーカーテスト音再生
-function testSpeaker() {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    
-    // スピーカー指定 (Chrome等のみ)
-    const spkId = document.getElementById('speakerSelect').value;
-    if (spkId && ctx.setSinkId) ctx.setSinkId(spkId);
+// 「TAP TO START」を押した時に呼ばれる
+async function startSetup() {
+    // 1. 無音を再生してオーディオコンテキストをアンロック
+    unlockAudioContext();
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 440; // ラの音
-    osc.start();
-    gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.5);
-    osc.stop(ctx.currentTime + 0.5);
+    // 2. マイクの許可を求める（ここで許可しないとリストが出ない）
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // 一旦止める（設定画面で再度取得するため）
+        stream.getTracks().forEach(t => t.stop());
+        
+        // 3. デバイス一覧を取得して設定画面へ
+        await getDevices('micSelect', 'speakerSelect');
+        
+        document.getElementById('start-overlay').style.display = 'none';
+        document.getElementById('entry-modal').style.display = 'flex';
+
+        // マイクテスト開始
+        document.getElementById('micSelect').addEventListener('change', startMicTest);
+        startMicTest();
+
+    } catch (err) {
+        alert("マイクの使用を許可してください。設定画面から許可してリロードしてください。");
+        console.error(err);
+    }
 }
 
-// マイクテスト (緑のバーを動かす)
+// 無音を再生する関数
+function unlockAudioContext() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0; // 無音
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(0);
+    osc.stop(0.1); // 0.1秒だけ再生
+}
+
+// ============================
+// 入室前テスト機能
+// ============================
+function testSpeaker() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    const osc = ctx.createOscillator();
+    const spkId = document.getElementById('speakerSelect').value;
+    
+    // スピーカー指定
+    if (spkId && ctx.setSinkId) ctx.setSinkId(spkId).catch(e=>{}); // エラー無視
+    else if (spkId && HTMLAudioElement.prototype.setSinkId) {
+        // Audioタグを使うフォールバック
+        const audio = new Audio();
+        audio.setSinkId(spkId);
+        // ここで音源ファイルを再生する手もあるが今回は簡易発振音で
+    }
+
+    osc.connect(ctx.destination);
+    osc.frequency.value = 523.25; // ドの音
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+}
+
 function startMicTest() {
     const micId = document.getElementById('micSelect').value;
     if(!micId) return;
 
     navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } })
     .then(stream => {
-        // 既存のコンテキストがあれば閉じる
         if(audioContext) audioContext.close();
-        
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const src = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         src.connect(analyser);
 
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const data = new Uint8Array(analyser.frequencyBinCount);
         const bar = document.getElementById('mic-visualizer-bar');
 
         const update = () => {
-            if(document.getElementById('entry-modal').style.display === 'none') return; // 入室したら停止
-            analyser.getByteFrequencyData(dataArray);
+            if(document.getElementById('entry-modal').style.display === 'none') return;
+            analyser.getByteFrequencyData(data);
             let sum = 0;
-            for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
-            const avg = sum / dataArray.length;
-            bar.style.width = Math.min(100, avg * 2) + '%'; // 音量に応じて幅変更
+            for(let i=0; i<data.length; i++) sum += data[i];
+            const vol = sum / data.length;
+            bar.style.width = Math.min(100, vol * 3) + '%';
             requestAnimationFrame(update);
         };
         update();
     })
-    .catch(e => console.log("マイクテスト待機中..."));
+    .catch(e => console.log(e));
 }
 
 // ============================
 // ゲーム開始
 // ============================
-function initGame() {
+document.getElementById('enterGameBtn').addEventListener('click', () => {
     const nameInput = document.getElementById('username');
     if (!nameInput.value) { alert("名前を入力してください"); return; }
     myName = nameInput.value;
 
     document.getElementById('entry-modal').style.display = 'none';
     
-    // 本番用マイク取得
+    // 本番用ストリーム取得
     const micId = document.getElementById('micSelect').value;
-    navigator.mediaDevices.getUserMedia({ audio: { deviceId: micId ? { exact: micId } : undefined } })
+    navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+            deviceId: micId ? { exact: micId } : undefined,
+            echoCancellation: true,
+            noiseSuppression: true
+        } 
+    })
     .then(stream => {
         myStream = stream;
-        setMicState(false); // 初期はミュート
+        setMicState(false);
         startConnection();
     })
-    .catch(err => {
-        alert("マイクエラー: " + err);
-    });
-}
+    .catch(err => alert("エラー: " + err));
+});
 
 function startConnection() {
     socket = io();
     socket.on('connect', () => { myId = socket.id; });
-
     socket.on('updateUsers', (data) => {
         users = data;
-        connectToUsers(); // ユーザー情報更新時に接続チェック
+        connectToUsers(); 
     });
 
     myPeer = new Peer();
@@ -133,41 +169,22 @@ function startConnection() {
     loop();
 }
 
-function loop() {
-    draw();
-    requestAnimationFrame(loop);
-}
+function loop() { draw(); requestAnimationFrame(loop); }
 
 // ============================
-// 退出処理
+// 会議室ロジック (重なり防止 & 音声修正)
 // ============================
-function exitOffice() {
-    if(confirm("退出して最初の画面に戻りますか？")) {
-        location.reload(); // ページをリロードして完全リセット
-    }
-}
-
-// ============================
-// 会議室 & 音声ロジック (修正版)
-// ============================
-
-// クリック判定
 canvas.addEventListener('click', (e) => {
-    if (myRoomId) return; // 会議室にいるなら移動不可
-
+    if (myRoomId) return;
     const pos = getWorldPos(e.clientX, e.clientY);
-    
-    // 会議室判定
-    const clickedRoom = MEETING_ROOMS.find(r => {
-        if (r.type === 'rect') return pos.x >= r.x && pos.x <= r.x + r.w && pos.y >= r.y && pos.y <= r.y + r.h;
-        else return Math.sqrt((pos.x - r.x)**2 + (pos.y - r.y)**2) <= r.r;
+    const room = MEETING_ROOMS.find(r => {
+        if (r.type === 'rect') return pos.x >= r.x && pos.x <= r.x+r.w && pos.y >= r.y && pos.y <= r.y+r.h;
+        else return Math.sqrt((pos.x-r.x)**2 + (pos.y-r.y)**2) <= r.r;
     });
-
-    if (clickedRoom) showRoomModal(clickedRoom);
+    if (room) showRoomModal(room);
     else moveMe(pos.x, pos.y);
 });
 
-// 会議室入室
 function showRoomModal(room) {
     const count = Object.values(users).filter(u => u.roomId === room.id).length;
     if (count >= room.capacity) { alert("満員です"); return; }
@@ -179,13 +196,25 @@ function showRoomModal(room) {
     document.getElementById('joinRoomBtn').onclick = () => {
         myRoomId = room.id;
         
-        // サーバーへ「部屋に入ったこと」を通知するため座標と一緒にroomIdを送る
-        let targetX = (room.type === 'rect') ? room.x + room.w/2 : room.x;
-        let targetY = (room.type === 'rect') ? room.y + room.h/2 : room.y;
+        // ★重なり防止: ランダムな位置を計算
+        let targetX, targetY;
+        if (room.type === 'rect') {
+            // 四角の中のランダムな位置 (端っこは避ける)
+            targetX = room.x + 20 + Math.random() * (room.w - 40);
+            targetY = room.y + 20 + Math.random() * (room.h - 40);
+        } else {
+            // 丸の中のランダムな位置
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.random() * (room.r - 20);
+            targetX = room.x + Math.cos(angle) * radius;
+            targetY = room.y + Math.sin(angle) * radius;
+        }
+
         myX = targetX; myY = targetY;
         
-        socket.emit('move', { x: myX, y: myY, roomId: myRoomId }); // ★ここが重要
-        
+        // サーバーへ通知
+        socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
+
         document.getElementById('room-modal').style.display = 'none';
         document.getElementById('leaveRoomBtn').style.display = 'block';
         document.getElementById('room-status').style.display = 'block';
@@ -196,13 +225,16 @@ function showRoomModal(room) {
 
 function closeRoomModal() { document.getElementById('room-modal').style.display = 'none'; }
 
-// 会議室退室
 function leaveMeetingRoom() {
     myRoomId = null;
-    moveMe(myX, myY + 150); // 少し外へ移動
+    moveMe(myX, myY + 150); 
     document.getElementById('leaveRoomBtn').style.display = 'none';
     document.getElementById('room-status').style.display = 'none';
     checkAudioStatus();
+}
+
+function exitOffice() {
+    if(confirm("退出しますか？")) location.reload();
 }
 
 function moveMe(x, y) {
@@ -214,32 +246,31 @@ function moveMe(x, y) {
 }
 
 // ----------------------
-// 音声接続制御 (最重要修正)
+// 音声接続 (修正)
 // ----------------------
 function checkAudioStatus() {
     let canSpeak = false;
 
     if (myRoomId) {
-        // 会議室
-        canSpeak = true;
-        micBtn.innerText = isMicMutedByUser ? "マイクOFF" : "マイクON (会議中)";
-        micBtn.disabled = false;
-        micBtn.style.background = isMicMutedByUser ? "#e74c3c" : "#e67e22"; // オレンジ
-    } else if (myX < 600) {
-        // 作業エリア
-        canSpeak = false;
-        micBtn.innerText = "会話禁止エリア";
-        micBtn.disabled = true;
-        micBtn.style.background = "#555";
-    } else {
-        // リビング
+        // 会議室: 自動ONにはしないがボタンは有効化
         canSpeak = true;
         micBtn.innerText = isMicMutedByUser ? "マイクOFF" : "マイクON";
         micBtn.disabled = false;
-        micBtn.style.background = isMicMutedByUser ? "#e74c3c" : "#27ae60"; // 赤/緑
+        micBtn.style.background = isMicMutedByUser ? "#e74c3c" : "#e67e22"; 
+    } else if (myX < 600) {
+        canSpeak = false;
+        micBtn.innerText = "禁止エリア";
+        micBtn.disabled = true;
+        micBtn.style.background = "#555";
+    } else {
+        canSpeak = true;
+        micBtn.innerText = isMicMutedByUser ? "マイクOFF" : "マイクON";
+        micBtn.disabled = false;
+        micBtn.style.background = isMicMutedByUser ? "#e74c3c" : "#27ae60"; 
     }
 
     setMicState(canSpeak && !isMicMutedByUser);
+    // 強制的に接続更新を走らせる
     connectToUsers();
 }
 
@@ -251,11 +282,12 @@ function connectToUsers() {
         const u = users[id];
         let shouldConnect = false;
 
+        // 接続条件チェック
         if (myRoomId) {
-            // ★自分が会議室にいる場合：相手も「同じIDの会議室」にいるか？
+            // 自分は会議室: 相手も「同じ部屋」なら接続
             if (u.roomId === myRoomId) shouldConnect = true;
         } else {
-            // ★自分が通常エリア：相手も「部屋なし」かつ「リビング(X>=600)」か？
+            // 自分は外: 相手も「外」かつ「リビング(X>=600)」なら接続
             if (!u.roomId && myX >= 600 && u.x >= 600) shouldConnect = true;
         }
 
@@ -266,7 +298,7 @@ function connectToUsers() {
                 handleStream(call);
             }
         } else {
-            // 切断処理
+            // 条件不一致なら切断
             if (peers[id]) {
                 peers[id].close();
                 delete peers[id];
@@ -279,19 +311,28 @@ function connectToUsers() {
 
 function handleStream(call) {
     call.on('stream', userAudio => {
+        // 重複チェック
         if (document.getElementById(call.peer)) return;
+        
         const audio = document.createElement('audio');
         audio.id = call.peer;
         audio.srcObject = userAudio;
-        audio.autoplay = true; audio.playsInline = true;
+        audio.autoplay = true; 
+        audio.playsInline = true; // スマホ用重要
+        
         const spkId = document.getElementById('speakerSelectInGame').value;
-        if(spkId && audio.setSinkId) audio.setSinkId(spkId);
+        if(spkId && audio.setSinkId) audio.setSinkId(spkId).catch(e=>{});
+        
         document.body.appendChild(audio);
+    });
+    call.on('close', () => {
+        const el = document.getElementById(call.peer);
+        if(el) el.remove();
     });
 }
 
 // ============================
-// その他 (描画・設定など)
+// その他
 // ============================
 function toggleMic() {
     isMicMutedByUser = !isMicMutedByUser;
@@ -304,6 +345,25 @@ function setMicState(isOn) {
     }
 }
 
+async function getDevices(mId, sId) {
+    try {
+        const d = await navigator.mediaDevices.enumerateDevices();
+        const m = document.getElementById(mId), s = document.getElementById(sId);
+        m.innerHTML = ''; s.innerHTML = '';
+        d.forEach(v => {
+            const o = document.createElement('option'); o.value = v.deviceId; o.text = v.label || v.kind;
+            if(v.kind==='audioinput') m.appendChild(o);
+            if(v.kind==='audiooutput') s.appendChild(o);
+        });
+    } catch(e) {}
+}
+
+function openSettings() { 
+    getDevices('micSelectInGame', 'speakerSelectInGame');
+    document.getElementById('settings-modal').style.display = 'flex'; 
+}
+function closeSettings() { document.getElementById('settings-modal').style.display = 'none'; }
+
 function draw() {
     let camX = myX - canvas.width / 2;
     let camY = myY - canvas.height / 2;
@@ -315,13 +375,11 @@ function draw() {
 
     // 背景
     ctx.fillStyle = "#f4f1ea"; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
-    
-    // エリア
-    ctx.fillStyle = "#e8ecef"; ctx.fillRect(0, 0, 600, WORLD_H); // 作業
-    ctx.fillStyle = "#bdc3c7"; // 机
+    ctx.fillStyle = "#e8ecef"; ctx.fillRect(0, 0, 600, WORLD_H); // Work Area
+    ctx.fillStyle = "#bdc3c7";
     for(let i=0; i<5; i++) for(let j=0; j<3; j++) ctx.fillRect(100 + j*150, 200 + i*200, 100, 60);
 
-    // 会議室描画
+    // 会議室
     MEETING_ROOMS.forEach(r => {
         ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.strokeStyle = "#34495e"; ctx.lineWidth = 5;
         if(r.type==='rect') { ctx.fillRect(r.x, r.y, r.w, r.h); ctx.strokeRect(r.x, r.y, r.w, r.h); }
@@ -352,31 +410,16 @@ function getWorldPos(cx, cy) {
     return { x: cx + camX, y: cy + camY };
 }
 
-async function getDevices(mId, sId) {
-    try {
-        const d = await navigator.mediaDevices.enumerateDevices();
-        const m = document.getElementById(mId), s = document.getElementById(sId);
-        m.innerHTML = ''; s.innerHTML = '';
-        d.forEach(v => {
-            const o = document.createElement('option'); o.value = v.deviceId; o.text = v.label || v.kind;
-            if(v.kind==='audioinput') m.appendChild(o);
-            if(v.kind==='audiooutput') s.appendChild(o);
-        });
-    } catch(e) {}
-}
-
-function openSettings() { 
-    getDevices('micSelectInGame', 'speakerSelectInGame');
-    document.getElementById('settings-modal').style.display = 'flex'; 
-}
-function closeSettings() { document.getElementById('settings-modal').style.display = 'none'; }
-
 // スマホ移動
 const spd = 10;
 const setupBtn = (id, dx, dy) => {
     const b = document.getElementById(id);
     let i;
-    b.addEventListener('touchstart', (e)=>{ e.preventDefault(); i=setInterval(()=>{if(!myRoomId)moveMe(myX+dx,myY+dy)},50); });
+    const act = (e) => { 
+        if(e.cancelable) e.preventDefault(); 
+        if(!myRoomId) i=setInterval(()=>moveMe(myX+dx,myY+dy),50); 
+    };
+    b.addEventListener('touchstart', act);
     b.addEventListener('touchend', ()=>clearInterval(i));
 };
 setupBtn('d-up',0,-spd); setupBtn('d-down',0,spd); setupBtn('d-left',-spd,0); setupBtn('d-right',spd,0);

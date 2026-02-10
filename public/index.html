@@ -7,10 +7,10 @@
     <style>
         body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; background: #2c3e50; user-select: none; }
         
-        /* モーダル共通 */
+        /* 共通モーダル */
         .modal-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9); display: flex; justify-content: center; align-items: center; 
+            background: rgba(0,0,0,0.92); display: flex; justify-content: center; align-items: center; 
             z-index: 100; color: white; flex-direction: column;
         }
         .panel { 
@@ -19,6 +19,16 @@
             max-height: 90vh; overflow-y: auto;
         }
         
+        /* 最初のスタート画面 */
+        #start-overlay { z-index: 200; background: #2c3e50; }
+        .start-btn-circle {
+            width: 150px; height: 150px; background: #e74c3c; border-radius: 50%;
+            display: flex; justify-content: center; align-items: center;
+            font-weight: bold; font-size: 20px; color: white; cursor: pointer;
+            box-shadow: 0 0 20px rgba(231, 76, 60, 0.6); animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+
         input, select { 
             padding: 10px; font-size: 16px; margin: 5px 0 15px 0; width: 100%; 
             border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box;
@@ -30,77 +40,71 @@
             margin-top: 10px; font-weight: bold; width: 100%; color: white; transition: 0.2s;
         }
         .btn-green { background: #27ae60; }
-        .btn-red { background: #c0392b; }
         .btn-blue { background: #3498db; }
         .btn-gray { background: #7f8c8d; }
 
-        /* マイクテスト用ビジュアライザー */
-        #mic-visualizer-bg {
-            width: 100%; height: 10px; background: #eee; border-radius: 5px; margin-bottom: 15px; overflow: hidden;
-        }
-        #mic-visualizer-bar {
-            width: 0%; height: 100%; background: #27ae60; transition: width 0.1s;
-        }
+        /* マイクテスト用バー */
+        #mic-visualizer-bg { width: 100%; height: 10px; background: #eee; border-radius: 5px; margin-bottom: 15px; overflow: hidden; }
+        #mic-visualizer-bar { width: 0%; height: 100%; background: #27ae60; transition: width 0.1s; }
 
-        /* 下部操作バー (以前のデザインに戻す) */
+        /* 操作バー */
         #controls-bar {
             position: absolute; bottom: 0; left: 0; width: 100%; height: 70px;
             background: rgba(30, 30, 30, 0.9); display: flex; justify-content: center; align-items: center;
             gap: 15px; z-index: 50; border-top: 1px solid #555;
         }
-        .ctrl-btn {
-            padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; color: white;
-        }
-        #micBtn { background: #e74c3c; width: 150px; } /* デフォルト赤 */
+        .ctrl-btn { padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; color: white; }
+        #micBtn { background: #e74c3c; width: 140px; }
         #exitBtn { background: #7f8c8d; }
-        #settingsBtn { background: #555; }
 
-        /* スマホ用コントローラー */
-        #d-pad {
-            display: none; position: absolute; bottom: 90px; right: 20px; width: 140px; height: 140px; z-index: 60;
-        }
-        .d-btn {
-            position: absolute; width: 50px; height: 50px; background: rgba(255, 255, 255, 0.2);
-            border: 2px solid rgba(255, 255, 255, 0.6); border-radius: 50%;
-            display: flex; justify-content: center; align-items: center; color: white; font-weight: bold; font-size: 24px;
-        }
-        #d-up { top: 0; left: 45px; }
-        #d-down { bottom: 0; left: 45px; }
-        #d-left { top: 45px; left: 0; }
-        #d-right { top: 45px; right: 0; }
-
-        /* 会議室入室中表示 */
+        /* 会議室ステータス */
         #room-status {
             position: absolute; top: 20px; left: 20px; padding: 10px 20px;
             background: #e67e22; color: white; font-weight: bold; border-radius: 30px;
             display: none; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
         }
+
+        /* スマホ用コントローラー */
+        #d-pad { display: none; position: absolute; bottom: 90px; right: 20px; width: 140px; height: 140px; z-index: 60; }
+        .d-btn {
+            position: absolute; width: 50px; height: 50px; background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.6); border-radius: 50%;
+            display: flex; justify-content: center; align-items: center; color: white; font-weight: bold; font-size: 24px;
+        }
+        #d-up { top: 0; left: 45px; } #d-down { bottom: 0; left: 45px; } #d-left { top: 45px; left: 0; } #d-right { top: 45px; right: 0; }
     </style>
 </head>
 <body>
 
-    <div id="entry-modal" class="modal-overlay">
+    <div id="start-overlay" class="modal-overlay">
+        <div class="start-btn-circle" onclick="startSetup()">
+            TAP TO<br>START
+        </div>
+        <p style="margin-top:20px; color:#ccc;">画面をタップして<br>セットアップを開始します</p>
+    </div>
+
+    <div id="entry-modal" class="modal-overlay" style="display: none;">
         <div class="panel">
             <h2>バーチャルオフィス</h2>
             <label>お名前</label>
             <input type="text" id="username" placeholder="名前を入力" maxlength="8">
             
-            <label>マイク選択</label>
+            <label>マイク選択 (バーが動くか確認)</label>
             <select id="micSelect"></select>
             <div id="mic-visualizer-bg"><div id="mic-visualizer-bar"></div></div>
             
             <label>スピーカー選択</label>
             <select id="speakerSelect"></select>
-            <button class="btn btn-blue" onclick="testSpeaker()">🔊 スピーカーテスト音再生</button>
+            <button class="btn btn-blue" onclick="testSpeaker()">🔊 テスト音を再生</button>
 
-            <button id="startBtn" class="btn btn-green" style="margin-top:20px;">入室する</button>
+            <button id="enterGameBtn" class="btn btn-green" style="margin-top:20px;">入室する</button>
         </div>
     </div>
 
     <div id="room-modal" class="modal-overlay" style="display: none;">
         <div class="panel">
-            <h3 id="room-title">会議室A</h3>
-            <p id="room-info">定員: 2名</p>
+            <h3 id="room-title">会議室</h3>
+            <p id="room-info">定員: -</p>
             <button id="joinRoomBtn" class="btn btn-green">入室する</button>
             <button onclick="closeRoomModal()" class="btn btn-gray">キャンセル</button>
         </div>
@@ -119,21 +123,14 @@
     <canvas id="gameCanvas"></canvas>
 
     <div id="d-pad">
-        <div id="d-up" class="d-btn">↑</div>
-        <div id="d-down" class="d-btn">↓</div>
-        <div id="d-left" class="d-btn">←</div>
-        <div id="d-right" class="d-btn">→</div>
+        <div id="d-up" class="d-btn">↑</div> <div id="d-down" class="d-btn">↓</div> <div id="d-left" class="d-btn">←</div> <div id="d-right" class="d-btn">→</div>
     </div>
 
     <div id="controls-bar">
         <button id="exitBtn" class="ctrl-btn" onclick="exitOffice()">退出</button>
         <button id="micBtn" class="ctrl-btn" onclick="toggleMic()">マイクOFF</button>
-        
-        <button id="leaveRoomBtn" class="ctrl-btn" onclick="leaveMeetingRoom()" style="display:none; background:#e67e22;">
-            会議室から出る
-        </button>
-        
-        <button id="settingsBtn" class="ctrl-btn" onclick="openSettings()">設定 ⚙️</button>
+        <button id="leaveRoomBtn" class="ctrl-btn" onclick="leaveMeetingRoom()" style="display:none; background:#e67e22;">退室</button>
+        <button id="settingsBtn" class="ctrl-btn" style="background:#555;" onclick="openSettings()">設定 ⚙️</button>
     </div>
 
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
