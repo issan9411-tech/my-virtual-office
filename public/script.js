@@ -22,20 +22,21 @@ const MAX_ZOOM = 2.0;
 const bgImage = new Image();
 bgImage.src = "bg.jpg"; 
 
-// BGM設定 (ループ有効)
+// BGM設定
 const bgmAudio = new Audio();
 bgmAudio.loop = true; 
-bgmAudio.volume = 0.3; // 初期音量
+bgmAudio.volume = 0.3;
 
 let timerInterval = null;
 let timerTime = 15 * 60; // 15分
-let isFocusMode = true; // true:集中, false:休憩
+let isFocusMode = true; 
 let isTimerRunning = false;
 
 const WORLD_W = 2000;
 const WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const TALK_DISTANCE = 120; 
+const DISCONNECT_DISTANCE = 150; 
 
 // エリア設定
 const MEETING_ROOMS = [
@@ -68,16 +69,12 @@ window.addEventListener('load', () => {
     canvas.height = window.innerHeight;
     if (isMobile) document.getElementById('d-pad').style.display = 'block';
     
-    // BGM選択時のイベント
     document.getElementById('bgmSelect').addEventListener('change', changeBgm);
     
-    // ★追加: BGM音量スライダーのイベント
     const volSlider = document.getElementById('bgmVolume');
     volSlider.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        bgmAudio.volume = val;
+        bgmAudio.volume = parseFloat(e.target.value);
     });
-    // 初期値を適用
     bgmAudio.volume = parseFloat(volSlider.value);
 });
 
@@ -164,7 +161,6 @@ function updateTimer() {
 
 function switchMode() {
     isFocusMode = !isFocusMode;
-    
     if (isFocusMode) {
         timerTime = 15 * 60; 
         document.getElementById('timer-status-text').innerText = "集中タイム (15分)";
@@ -191,7 +187,6 @@ function changeBgm() {
 
 function playCurrentBgm() {
     let src = "";
-    
     if (!isFocusMode) {
         src = "bgm_break.mp3";
     } else {
@@ -203,7 +198,6 @@ function playCurrentBgm() {
     }
 
     if (src) {
-        // 現在の曲と違う場合のみ読み込み直す（ループ設定は維持）
         if (!bgmAudio.src.includes(src)) {
             bgmAudio.src = src;
             bgmAudio.load();
@@ -309,8 +303,15 @@ function connectToUsers() {
             if (u.roomId === myRoomId) shouldConnect = true;
         } else {
             if (!u.roomId) {
+                const dist = Math.sqrt((myX - u.x)**2 + (myY - u.y)**2);
                 const uZoneIsSilent = ZONES.SILENT.check(u.x, u.y);
-                if (myZone.allowMic && !uZoneIsSilent) shouldConnect = true;
+                if (myZone.allowMic && !uZoneIsSilent) {
+                    if (dist <= TALK_DISTANCE) {
+                        shouldConnect = true;
+                    } else if (dist <= DISCONNECT_DISTANCE && peers[u.peerId]) {
+                        shouldConnect = true;
+                    }
+                }
             }
         }
 
@@ -376,12 +377,47 @@ function removeAudio(peerId) {
     if(el) el.remove();
 }
 
+// ============================
+// 移動 & 判定 (ダブルクリック・十字キー)
+// ============================
+
+// 1. シングルクリック: 会議室入室判定のみ (移動なし)
 canvas.addEventListener('click', (e) => {
     if (myRoomId) return;
     const pos = getWorldPos(e.clientX, e.clientY);
     const room = MEETING_ROOMS.find(r => pos.x >= r.x && pos.x <= r.x+r.w && pos.y >= r.y && pos.y <= r.y+r.h);
     if (room) showRoomModal(room);
-    else moveMe(pos.x, pos.y);
+});
+
+// 2. ダブルクリック: 移動
+canvas.addEventListener('dblclick', (e) => {
+    if (myRoomId) return;
+    const pos = getWorldPos(e.clientX, e.clientY);
+    const room = MEETING_ROOMS.find(r => pos.x >= r.x && pos.x <= r.x+r.w && pos.y >= r.y && pos.y <= r.y+r.h);
+    if (!room) {
+        moveMe(pos.x, pos.y);
+    }
+});
+
+// 3. PC用 十字キー移動
+window.addEventListener('keydown', (e) => {
+    if (myRoomId || document.activeElement.tagName === 'INPUT') return;
+    const speed = 20; 
+    let nextX = myX;
+    let nextY = myY;
+    let moved = false;
+
+    switch(e.key) {
+        case 'ArrowUp': nextY -= speed; moved = true; break;
+        case 'ArrowDown': nextY += speed; moved = true; break;
+        case 'ArrowLeft': nextX -= speed; moved = true; break;
+        case 'ArrowRight': nextX += speed; moved = true; break;
+    }
+
+    if (moved) {
+        e.preventDefault(); 
+        moveMe(nextX, nextY);
+    }
 });
 
 let lastMoveTime = 0;
