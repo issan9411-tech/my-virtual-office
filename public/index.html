@@ -10,12 +10,14 @@
     <style>
         body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; background: #2c3e50; user-select: none; }
         
+        /* 左上の常時表示ロゴ */
         #site-logo {
             position: absolute; top: 20px; left: 20px; width: 60px; height: 60px;
             z-index: 80; object-fit: contain; pointer-events: none;
             filter: drop-shadow(0 2px 5px rgba(0,0,0,0.3));
         }
 
+        /* アンケートリンク */
         #survey-link {
             position: fixed; top: 20px; right: 20px;
             background: rgba(255, 255, 255, 0.6); padding: 12px 20px;
@@ -25,6 +27,7 @@
         }
         #survey-link:hover { background: rgba(255, 255, 255, 0.95); transform: translateY(-2px); }
 
+        /* モーダル共通 */
         .modal-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.92); display: flex; justify-content: center; align-items: center; 
@@ -36,7 +39,17 @@
             max-height: 90vh; overflow-y: auto;
         }
         
+        /* スタート画面 */
         #start-overlay { z-index: 200; background: #2c3e50; }
+        
+        /* ★追加: スタート画面用のロゴスタイル */
+        .start-logo {
+            width: 120px; height: 120px; 
+            object-fit: contain; 
+            margin-bottom: 40px; /* ボタンとの間隔 */
+            filter: drop-shadow(0 0 15px rgba(255,255,255,0.3));
+        }
+
         .start-btn-circle {
             width: 150px; height: 150px; background: #e74c3c; border-radius: 50%;
             display: flex; justify-content: center; align-items: center;
@@ -96,9 +109,12 @@
 <body>
 
     <img id="site-logo" src="icon.png" alt="Logo">
+    
     <a id="survey-link" href="https://forms.gle/bSYVyZeg11F68GGa7" target="_blank">📝 β版ご利用者アンケートフォーム</a>
 
     <div id="start-overlay" class="modal-overlay">
+        <img src="icon.png" alt="Sync Salon Logo" class="start-logo">
+        
         <div class="start-btn-circle" onclick="startSetup()">TAP TO<br>START</div>
         <p style="margin-top:20px; color:#ccc;">画面をタップして<br>セットアップを開始します</p>
     </div>
