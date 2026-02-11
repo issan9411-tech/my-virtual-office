@@ -11,6 +11,7 @@ let myName = "ゲスト";
 let myRoomId = null; 
 let isMicMutedByUser = true;
 let audioContext = null; 
+let currentSpeakerId = "";
 
 // ズーム設定
 let cameraScale = 1.0;
@@ -21,14 +22,20 @@ const MAX_ZOOM = 2.0;
 const bgImage = new Image();
 bgImage.src = "bg.jpg"; 
 
+// BGM設定 (ループ有効)
+const bgmAudio = new Audio();
+bgmAudio.loop = true; 
+bgmAudio.volume = 0.3; // 初期音量
+
+let timerInterval = null;
+let timerTime = 15 * 60; // 15分
+let isFocusMode = true; // true:集中, false:休憩
+let isTimerRunning = false;
+
 const WORLD_W = 2000;
 const WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-// ★会話距離 (アバター3人分) + マージン
-// 近づく時は120pxで接続、離れる時は150pxで切断（チラつき防止）
 const TALK_DISTANCE = 120; 
-const DISCONNECT_DISTANCE = 150; 
 
 // エリア設定
 const MEETING_ROOMS = [
@@ -60,6 +67,18 @@ window.addEventListener('load', () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     if (isMobile) document.getElementById('d-pad').style.display = 'block';
+    
+    // BGM選択時のイベント
+    document.getElementById('bgmSelect').addEventListener('change', changeBgm);
+    
+    // ★追加: BGM音量スライダーのイベント
+    const volSlider = document.getElementById('bgmVolume');
+    volSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        bgmAudio.volume = val;
+    });
+    // 初期値を適用
+    bgmAudio.volume = parseFloat(volSlider.value);
 });
 
 canvas.addEventListener('wheel', (e) => {
@@ -82,14 +101,10 @@ async function startSetup() {
         await getDevices('micSelect', 'speakerSelect');
         document.getElementById('start-overlay').style.display = 'none';
         document.getElementById('entry-modal').style.display = 'flex';
-        
         const micSelect = document.getElementById('micSelect');
-        micSelect.onchange = () => startMicTest('micSelect', 'mic-visualizer-bar-entry');
+        micSelect.addEventListener('change', () => startMicTest('micSelect', 'mic-visualizer-bar-entry'));
         startMicTest('micSelect', 'mic-visualizer-bar-entry');
-
-    } catch (err) {
-        alert("マイクの使用を許可してください。");
-    }
+    } catch (err) { alert("マイクの使用を許可してください。"); }
 }
 
 function initAudioContext() {
@@ -97,14 +112,107 @@ function initAudioContext() {
     if (!AC) return;
     if (!audioContext) audioContext = new AC();
     if (audioContext.state === 'suspended') audioContext.resume();
-    // iOS対策の無音再生
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    gain.gain.value = 0;
-    osc.connect(gain);
-    gain.connect(audioContext.destination);
-    osc.start(0);
-    osc.stop(0.1);
+    const osc = audioContext.createOscillator(); const gain = audioContext.createGain();
+    gain.gain.value = 0; osc.connect(gain); gain.connect(audioContext.destination); osc.start(0); osc.stop(0.1);
+}
+
+// ============================
+// ポモドーロタイマー機能
+// ============================
+function openTimer() { document.getElementById('timer-modal').style.display = 'flex'; }
+function closeTimer() { document.getElementById('timer-modal').style.display = 'none'; }
+
+function toggleTimer() {
+    const btn = document.getElementById('timerStartBtn');
+    if (isTimerRunning) {
+        clearInterval(timerInterval);
+        isTimerRunning = false;
+        bgmAudio.pause();
+        btn.innerText = "再開";
+        btn.className = "btn btn-green";
+    } else {
+        timerInterval = setInterval(updateTimer, 1000);
+        isTimerRunning = true;
+        playCurrentBgm();
+        btn.innerText = "一時停止";
+        btn.className = "btn btn-orange";
+    }
+}
+
+function resetTimer() {
+    clearInterval(timerInterval);
+    isTimerRunning = false;
+    isFocusMode = true;
+    timerTime = 15 * 60;
+    bgmAudio.pause();
+    bgmAudio.currentTime = 0;
+    
+    updateTimerDisplay();
+    document.getElementById('timerStartBtn').innerText = "スタート";
+    document.getElementById('timerStartBtn').className = "btn btn-green";
+    document.getElementById('timer-status-text').innerText = "集中タイム (15分)";
+    document.getElementById('timer-status-text').style.color = "#e67e22";
+}
+
+function updateTimer() {
+    timerTime--;
+    if (timerTime < 0) {
+        switchMode();
+    }
+    updateTimerDisplay();
+}
+
+function switchMode() {
+    isFocusMode = !isFocusMode;
+    
+    if (isFocusMode) {
+        timerTime = 15 * 60; 
+        document.getElementById('timer-status-text').innerText = "集中タイム (15分)";
+        document.getElementById('timer-status-text').style.color = "#e67e22";
+    } else {
+        timerTime = 5 * 60; 
+        document.getElementById('timer-status-text').innerText = "休憩タイム (5分)";
+        document.getElementById('timer-status-text').style.color = "#27ae60";
+    }
+    playCurrentBgm();
+}
+
+function updateTimerDisplay() {
+    const m = Math.floor(timerTime / 60).toString().padStart(2, '0');
+    const s = (timerTime % 60).toString().padStart(2, '0');
+    document.getElementById('timer-display').innerText = `${m}:${s}`;
+}
+
+function changeBgm() {
+    if (isTimerRunning) {
+        playCurrentBgm();
+    }
+}
+
+function playCurrentBgm() {
+    let src = "";
+    
+    if (!isFocusMode) {
+        src = "bgm_break.mp3";
+    } else {
+        const selected = document.getElementById('bgmSelect').value;
+        if (selected === "focus1") src = "bgm_focus1.mp3";
+        else if (selected === "focus2") src = "bgm_focus2.mp3";
+        else if (selected === "focus3") src = "bgm_focus3.mp3";
+        else src = ""; 
+    }
+
+    if (src) {
+        // 現在の曲と違う場合のみ読み込み直す（ループ設定は維持）
+        if (!bgmAudio.src.includes(src)) {
+            bgmAudio.src = src;
+            bgmAudio.load();
+        }
+        if(currentSpeakerId && bgmAudio.setSinkId) bgmAudio.setSinkId(currentSpeakerId).catch(e=>{});
+        bgmAudio.play().catch(e => console.log("BGM再生エラー:", e));
+    } else {
+        bgmAudio.pause();
+    }
 }
 
 // ============================
@@ -118,17 +226,10 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
     initAudioContext();
 
     const micId = document.getElementById('micSelect').value;
-    
-    // ★軽量化: 音質設定を落として負荷を下げる
+    currentSpeakerId = document.getElementById('speakerSelect').value;
+
     const constraints = { 
-        audio: { 
-            deviceId: micId ? { exact: micId } : undefined,
-            echoCancellation: true, 
-            noiseSuppression: true, 
-            autoGainControl: true,
-            channelCount: 1, // モノラルにする（通信量半減）
-            sampleRate: 16000 // サンプルレートを下げる（音声には十分）
-        } 
+        audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000 } 
     };
 
     navigator.mediaDevices.getUserMedia(constraints)
@@ -143,83 +244,114 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
 function startConnection() {
     socket = io();
     socket.on('connect', () => { myId = socket.id; });
-    socket.on('updateUsers', (data) => { users = data; }); // 接続チェックは定期実行に任せる
-    
+    socket.on('updateUsers', (data) => { users = data; updateVolumes(); });
     myPeer = new Peer();
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
-    myPeer.on('call', call => {
-        call.answer(myStream);
-        handleStream(call);
-    });
-
-    // ★接続管理: 1秒に1回チェック（頻度を下げて軽くする）
-    setInterval(manageConnections, 1000);
+    myPeer.on('call', call => { call.answer(myStream); handleStream(call); });
+    
+    setInterval(connectToUsers, 1500);
+    setInterval(updateVolumes, 500);
     loop();
 }
 
 function loop() { draw(); requestAnimationFrame(loop); }
 
 // ============================
-// ★重要: 接続の切断・接続管理 (軽量化の核心)
+// エリア・音声制御
 // ============================
-function manageConnections() {
+function checkAudioStatus() {
+    const currentZone = getCurrentZone();
+    let canSpeak = false;
+    let statusText = "";
+
+    if (myRoomId) {
+        canSpeak = true;
+        statusText = "会議中";
+        updateMicBtn(true, statusText);
+    } else {
+        if (!currentZone.allowMic) {
+            canSpeak = false;
+            statusText = "会話禁止エリア";
+            updateMicBtn(false, statusText);
+        } else {
+            canSpeak = true;
+            statusText = "会話OK (近距離)";
+            updateMicBtn(true, statusText);
+        }
+    }
+    setMicState(canSpeak && !isMicMutedByUser);
+    updateVolumes();
+}
+
+function updateMicBtn(enabled, text) {
+    if (!enabled) {
+        micBtn.disabled = true;
+        micBtn.innerText = text;
+        micBtn.style.background = "#555";
+    } else {
+        micBtn.disabled = false;
+        micBtn.innerText = isMicMutedByUser ? "マイクOFF" : "マイクON";
+        micBtn.style.background = isMicMutedByUser ? "#e74c3c" : "#27ae60";
+    }
+}
+
+function connectToUsers() {
     if (!myPeer || !myStream || !myId) return;
     const myZone = getCurrentZone();
 
-    // 1. マイクボタンの表示更新
-    updateMicStatus(myZone);
-
-    // 2. ユーザーごとの接続判定
     Object.keys(users).forEach(targetId => {
         if (targetId === myId) return;
         const u = users[targetId];
         if (!u.peerId) return;
 
         let shouldConnect = false;
-
-        // --- 判定ロジック ---
         if (myRoomId) {
-            // 会議室: 同じ部屋なら接続
             if (u.roomId === myRoomId) shouldConnect = true;
         } else {
-            // リビング: お互い部屋なし
             if (!u.roomId) {
-                const dist = Math.sqrt((myX - u.x)**2 + (myY - u.y)**2);
                 const uZoneIsSilent = ZONES.SILENT.check(u.x, u.y);
-                
-                // 禁止エリア外 かつ 距離内なら接続
-                if (myZone.allowMic && !uZoneIsSilent) {
-                    if (dist <= TALK_DISTANCE) {
-                        shouldConnect = true;
-                    } else if (dist <= DISCONNECT_DISTANCE && peers[u.peerId]) {
-                        // 少し離れても、既に繋がっていれば維持（チラつき防止）
-                        shouldConnect = true;
-                    }
-                }
+                if (myZone.allowMic && !uZoneIsSilent) shouldConnect = true;
             }
         }
 
-        // --- 実行 ---
         if (shouldConnect) {
-            // 未接続なら繋ぐ
             if (!peers[u.peerId]) {
-                // 重複防止: IDが大きい方からかける
-                if (myPeer.id > u.peerId) {
-                    console.log("接続開始:", u.name);
+                if (myPeer.id > u.peerId) { 
                     const call = myPeer.call(u.peerId, myStream);
                     peers[u.peerId] = call;
                     handleStream(call);
                 }
             }
         } else {
-            // ★重要: 不要になったら即切断（負荷軽減）
             if (peers[u.peerId]) {
-                console.log("切断:", u.name);
-                peers[u.peerId].close(); // WebRTC切断
-                delete peers[u.peerId];  // 管理から削除
-                removeAudio(u.peerId);   // 音声タグ削除
+                peers[u.peerId].close();
+                delete peers[u.peerId];
+                removeAudio(u.peerId);
             }
         }
+    });
+}
+
+function updateVolumes() {
+    Object.keys(users).forEach(targetId => {
+        if (targetId === myId) return;
+        const u = users[targetId];
+        if (!u.peerId) return;
+        const audioEl = document.getElementById("audio-" + u.peerId);
+        if (!audioEl) return;
+
+        let volume = 0;
+        if (myRoomId) {
+            if (u.roomId === myRoomId) volume = 1.0;
+        } else {
+            if (!u.roomId) {
+                const dist = Math.sqrt((myX - u.x)**2 + (myY - u.y)**2);
+                if (dist <= TALK_DISTANCE) volume = 1.0;
+                else volume = 0;
+            }
+        }
+        if (volume <= 0.01) audioEl.muted = true;
+        else { audioEl.muted = false; audioEl.volume = volume; }
     });
 }
 
@@ -231,21 +363,12 @@ function handleStream(call) {
         audio.srcObject = remoteStream;
         audio.autoplay = true; 
         audio.playsInline = true;
-        
-        // スピーカー適用
-        const spkId = document.getElementById('speakerSelectInGame') ? document.getElementById('speakerSelectInGame').value : null;
-        if(spkId && audio.setSinkId) audio.setSinkId(spkId).catch(e=>{});
-        
+        if(currentSpeakerId && audio.setSinkId) audio.setSinkId(currentSpeakerId).catch(e=>{});
+        audio.volume = 0; audio.muted = true;
         document.body.appendChild(audio);
     });
-    
-    // エラーや切断時のクリーンアップ
-    const cleanup = () => {
-        removeAudio(call.peer);
-        if (peers[call.peer]) delete peers[call.peer];
-    };
-    call.on('close', cleanup);
-    call.on('error', cleanup);
+    call.on('close', () => { removeAudio(call.peer); delete peers[call.peer]; });
+    call.on('error', () => { removeAudio(call.peer); delete peers[call.peer]; });
 }
 
 function removeAudio(peerId) {
@@ -253,68 +376,26 @@ function removeAudio(peerId) {
     if(el) el.remove();
 }
 
-function updateMicStatus(currentZone) {
-    let canSpeak = false;
-    let statusText = "";
-
-    if (myRoomId) {
-        canSpeak = true;
-        statusText = "会議中";
-    } else {
-        if (!currentZone.allowMic) {
-            canSpeak = false;
-            statusText = "会話禁止エリア";
-        } else {
-            canSpeak = true;
-            statusText = "会話OK (近距離)";
-        }
-    }
-
-    // ボタンの見た目更新
-    if (!canSpeak) {
-        micBtn.disabled = true;
-        micBtn.innerText = statusText;
-        micBtn.style.background = "#555";
-    } else {
-        micBtn.disabled = false;
-        micBtn.innerText = isMicMutedByUser ? "マイクOFF" : "マイクON";
-        micBtn.style.background = isMicMutedByUser ? "#e74c3c" : "#27ae60";
-    }
-    
-    setMicState(canSpeak && !isMicMutedByUser);
-}
-
-// ============================
-// 移動 & 判定
-// ============================
 canvas.addEventListener('click', (e) => {
     if (myRoomId) return;
     const pos = getWorldPos(e.clientX, e.clientY);
-    
-    const room = MEETING_ROOMS.find(r => 
-        pos.x >= r.x && pos.x <= r.x+r.w && pos.y >= r.y && pos.y <= r.y+r.h
-    );
-
+    const room = MEETING_ROOMS.find(r => pos.x >= r.x && pos.x <= r.x+r.w && pos.y >= r.y && pos.y <= r.y+r.h);
     if (room) showRoomModal(room);
     else moveMe(pos.x, pos.y);
 });
 
-// ★軽量化: 移動の送信頻度を制限
 let lastMoveTime = 0;
 function moveMe(x, y) {
     myX = Math.max(20, Math.min(x, WORLD_W-20));
     myY = Math.max(20, Math.min(y, WORLD_H-20));
-    
     const now = Date.now();
-    // 50ms (秒間20回) 以上経過していないと送信しない
     if (socket && (now - lastMoveTime > 50)) {
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
         lastMoveTime = now;
     }
-    
-    // 自分のマイク状態更新は即時反映
     const myZone = getCurrentZone();
-    updateMicStatus(myZone);
+    updateMicBtn(!myRoomId && !myZone.allowMic ? false : true, 
+                 !myRoomId && !myZone.allowMic ? "会話禁止エリア" : (isMicMutedByUser?"マイクOFF":"マイクON"));
 }
 
 function getCurrentZone() {
@@ -325,7 +406,6 @@ function getCurrentZone() {
 function showRoomModal(room) {
     const count = Object.values(users).filter(u => u.roomId === room.id).length;
     if (count >= room.capacity) { alert("満員です"); return; }
-    
     document.getElementById('room-title').innerText = room.name;
     document.getElementById('room-info').innerText = `定員: ${count}/${room.capacity}`;
     document.getElementById('room-modal').style.display = 'flex';
@@ -340,13 +420,11 @@ function showRoomModal(room) {
         myX = room.x + room.w/2 - 50 + Math.random()*100;
         myY = room.y + room.h/2 - 50 + Math.random()*100;
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
-        
         document.getElementById('room-modal').style.display = 'none';
         document.getElementById('leaveRoomBtn').style.display = 'block';
         document.getElementById('room-status').style.display = 'block';
         if(myStream) myStream.getAudioTracks().forEach(t => t.enabled = true);
-        
-        // 接続状態を即座に再計算
+        checkAudioStatus();
         manageConnections();
     };
 }
@@ -358,12 +436,12 @@ function leaveMeetingRoom() {
     moveMe(1300, 900);
     document.getElementById('leaveRoomBtn').style.display = 'none';
     document.getElementById('room-status').style.display = 'none';
+    checkAudioStatus();
     manageConnections();
 }
 
-// ============================
-// 描画
-// ============================
+function manageConnections() { connectToUsers(); }
+
 function draw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0); 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -372,7 +450,6 @@ function draw() {
 
     const visibleW = canvas.width / cameraScale;
     const visibleH = canvas.height / cameraScale;
-
     let camX = myX - visibleW / 2;
     let camY = myY - visibleH / 2;
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
@@ -401,8 +478,7 @@ function draw() {
     if (!myRoomId && getCurrentZone() === ZONES.LIVING) {
         ctx.beginPath();
         ctx.arc(myX, myY, TALK_DISTANCE, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(46, 204, 113, 0.1)"; 
-        ctx.fill();
+        ctx.fillStyle = "rgba(46, 204, 113, 0.1)"; ctx.fill();
         ctx.strokeStyle = "rgba(46, 204, 113, 0.5)"; ctx.lineWidth = 1; ctx.stroke();
     }
 
@@ -432,8 +508,8 @@ function getWorldPos(cx, cy) {
     return { x: (cx / cameraScale) + camX, y: (cy / cameraScale) + camY };
 }
 
-// ユーティリティ & 設定
-function toggleMic() { isMicMutedByUser = !isMicMutedByUser; updateMicStatus(getCurrentZone()); }
+// ユーティリティ
+function toggleMic() { isMicMutedByUser = !isMicMutedByUser; checkAudioStatus(); }
 function setMicState(isOn) { if (myStream && myStream.getAudioTracks()[0]) myStream.getAudioTracks()[0].enabled = isOn; }
 function exitOffice() { if(confirm("退出しますか？")) location.reload(); }
 
@@ -457,8 +533,7 @@ function openSettings() {
             if (currentMicId) document.getElementById('micSelectInGame').value = currentMicId;
         }
         const speakerSelect = document.getElementById('speakerSelectInGame');
-        // 現在のスピーカーIDがあればセット（Chrome用）
-        // (簡易実装: 本来は変数を保持すべきだが、apply時にDOMから取る)
+        if (currentSpeakerId) speakerSelect.value = currentSpeakerId;
         
         const micSelect = document.getElementById('micSelectInGame');
         micSelect.onchange = () => startMicTest('micSelectInGame', 'mic-visualizer-bar-game');
@@ -475,7 +550,6 @@ async function applySettings() {
 
     if (micId) {
         try {
-            // 適用時も軽量設定で取得
             const newStream = await navigator.mediaDevices.getUserMedia({
                 audio: { 
                     deviceId: { exact: micId }, 
@@ -486,7 +560,6 @@ async function applySettings() {
             if (myStream) myStream.getTracks().forEach(t => t.stop());
             myStream = newStream;
             setMicState(!isMicMutedByUser); 
-            // 接続中のピアに新しいトラックを送る
             Object.values(peers).forEach(call => {
                 const sender = call.peerConnection.getSenders().find(s => s.track.kind === 'audio');
                 if (sender) sender.replaceTrack(newStream.getAudioTracks()[0]);
@@ -495,9 +568,11 @@ async function applySettings() {
         } catch (e) { alert("失敗: " + e); }
     }
     if (spkId) {
+        currentSpeakerId = spkId;
         document.querySelectorAll('audio').forEach(a => {
             if (a.setSinkId) a.setSinkId(spkId).catch(e=>{});
         });
+        if(bgmAudio.setSinkId) bgmAudio.setSinkId(spkId).catch(e=>{});
     }
     closeSettings();
 }
