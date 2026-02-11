@@ -16,6 +16,10 @@ let isMicMutedByUser = true;
 let audioContext = null; 
 let currentSpeakerId = "";
 
+// ★BGM用 Web Audio API ノード
+let bgmSourceNode = null;
+let bgmGainNode = null;
+
 // ズーム設定
 let cameraScale = 1.0;
 const MIN_ZOOM = 0.4; 
@@ -28,7 +32,7 @@ bgImage.src = "bg.jpg";
 // BGM設定
 const bgmAudio = new Audio();
 bgmAudio.loop = true; 
-bgmAudio.volume = 0.3;
+bgmAudio.crossOrigin = "anonymous"; // iOS対応用
 
 let timerInterval = null;
 let timerTime = 15 * 60;
@@ -73,25 +77,25 @@ window.addEventListener('load', () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     
-    // スマホ判定で十字キーを表示
     if (isMobile) {
         document.getElementById('d-pad').style.display = 'block';
     }
     
     document.getElementById('bgmSelect').addEventListener('change', changeBgm);
     
+    // ★音量スライダー制御 (GainNodeを使用)
     const volSlider = document.getElementById('bgmVolume');
     volSlider.addEventListener('input', (e) => {
-        bgmAudio.volume = parseFloat(e.target.value);
+        const val = parseFloat(e.target.value);
+        if (bgmGainNode) {
+            bgmGainNode.gain.value = val;
+        }
     });
-    bgmAudio.volume = parseFloat(volSlider.value);
 
-    // タブ復帰時のオーディオ再開
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') ensureAudioContext();
     });
     
-    // 画面タップ時のオーディオ再開
     document.body.addEventListener('click', ensureAudioContext, { once: false });
     document.body.addEventListener('touchstart', ensureAudioContext, { once: false, passive: true });
 });
@@ -108,12 +112,34 @@ function changeZoom(delta) {
     draw();
 }
 
+// ★オーディオ初期化 & BGMノード接続
 function ensureAudioContext() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    if (!audioContext) audioContext = new AC();
+    
+    if (!audioContext) {
+        audioContext = new AC();
+    }
+    
     if (audioContext.state === 'suspended') {
         audioContext.resume().catch(e => {});
+    }
+
+    // ★BGM用のGainNodeを作成（スマホで音量調整するため）
+    if (!bgmSourceNode && audioContext) {
+        try {
+            bgmSourceNode = audioContext.createMediaElementSource(bgmAudio);
+            bgmGainNode = audioContext.createGain();
+            
+            // スライダーの初期値を適用
+            const sliderVal = parseFloat(document.getElementById('bgmVolume').value);
+            bgmGainNode.gain.value = sliderVal;
+
+            bgmSourceNode.connect(bgmGainNode);
+            bgmGainNode.connect(audioContext.destination);
+        } catch (e) {
+            console.log("AudioNode setup warning:", e);
+        }
     }
 }
 
@@ -178,7 +204,6 @@ function startSocketConnection() {
         activeCalls[call.peer] = call;
     });
 
-    // 定期処理
     setInterval(manageConnections, 1000);
     setInterval(updateVolumes, 500);
     loop();
@@ -230,7 +255,6 @@ function manageConnections() {
         }
     });
 
-    // クリーンアップ
     Object.keys(activeCalls).forEach(peerId => {
         const isUserExists = Object.values(users).some(u => u.peerId === peerId);
         if (!isUserExists) {
@@ -287,7 +311,7 @@ function updateVolumes() {
 }
 
 // ============================
-// 移動 & 判定 (十字キー修正)
+// 移動 & 判定
 // ============================
 canvas.addEventListener('click', (e) => {
     if (myRoomId) return;
@@ -316,49 +340,35 @@ window.addEventListener('keydown', (e) => {
     if (moved) { e.preventDefault(); moveMe(nextX, nextY); }
 });
 
-// ★十字キーの動作修正
 const setupBtn = (id, dx, dy) => {
     const btn = document.getElementById(id);
     let interval = null;
     const speed = 20;
 
     const startMove = (e) => {
-        if(e.cancelable) e.preventDefault(); // スクロール防止
-        if(myRoomId) return; // 部屋の中では無効
-
+        if(e.cancelable) e.preventDefault();
+        if(myRoomId) return;
         if(!interval) {
             interval = setInterval(() => {
-                // 壁判定
                 let nextX = myX + dx * speed;
                 let nextY = myY + dy * speed;
                 nextX = Math.max(20, Math.min(nextX, WORLD_W-20));
                 nextY = Math.max(20, Math.min(nextY, WORLD_H-20));
-                
-                // 即座にローカル座標を更新して描画反映
-                myX = nextX;
-                myY = nextY;
-                
-                // サーバー送信（moveMeの送信制限を利用）
+                myX = nextX; myY = nextY;
                 moveMe(myX, myY); 
-            }, 50); // 50msごとに更新
+            }, 50);
         }
     };
-
     const stopMove = (e) => {
         if(e.cancelable) e.preventDefault();
-        clearInterval(interval);
-        interval = null;
+        clearInterval(interval); interval = null;
     };
-
-    // スマホ: touchstart/touchend (passive: false必須)
     btn.addEventListener('touchstart', startMove, { passive: false });
     btn.addEventListener('touchend', stopMove, { passive: false });
-    // PCデバッグ用
     btn.addEventListener('mousedown', startMove);
     window.addEventListener('mouseup', stopMove);
 };
 
-// ボタン設定実行
 setupBtn('d-up', 0, -1);
 setupBtn('d-down', 0, 1);
 setupBtn('d-left', -1, 0);
@@ -371,12 +381,10 @@ function moveMe(x, y) {
     myY = Math.max(20, Math.min(y, WORLD_H-20));
     
     const now = Date.now();
-    // 送信間引き: 50ms以上経過していたらサーバーへ送る
     if (socket && (now - lastMoveTime > 50)) {
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
         lastMoveTime = now;
     }
-    
     const myZone = getCurrentZone();
     updateMicBtn(!myRoomId && !myZone.allowMic ? false : true, 
                  !myRoomId && !myZone.allowMic ? "会話禁止エリア" : (isMicMutedByUser?"マイクOFF":"マイクON"));
@@ -531,10 +539,21 @@ function playCurrentBgm() {
         else src = "";
     }
     if (src) {
+        ensureAudioContext(); // 再生前に必ずコンテキスト確認
+        
         if (!bgmAudio.src.includes(src)) {
             bgmAudio.src = src;
             bgmAudio.load();
         }
+        
+        // GainNodeが切れていたら再接続
+        if(bgmGainNode) {
+            try {
+                // 古い接続を切って繋ぎ直すのはリスクがあるので、値の更新だけにする
+                // ただし、もし再生されない場合は再接続が必要
+            } catch(e){}
+        }
+
         if(currentSpeakerId && bgmAudio.setSinkId) bgmAudio.setSinkId(currentSpeakerId).catch(e=>{});
         bgmAudio.play().catch(e=>{});
     } else {
