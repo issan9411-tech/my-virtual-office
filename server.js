@@ -9,10 +9,11 @@ app.use(express.static("public"));
 app.use(express.static(__dirname));
 
 let users = {};
-
-// ★部屋ごとのYouTube状態を保存するオブジェクト
-// キー: roomId, 値: { videoId, isPlaying, timestamp, isRepeat }
 let roomYoutubeStates = {};
+
+// ★画面共有の状態管理
+// key: roomId, value: socketId (共有している人のID)
+let roomScreenShares = {};
 
 io.on("connection", (socket) => {
     // 初期データ
@@ -39,26 +40,63 @@ io.on("connection", (socket) => {
             
             io.emit("updateUsers", users);
 
-            // 新しい部屋に入った場合、その部屋のYouTube状態を送る
+            // 部屋移動時の処理
             if (newRoom && newRoom !== oldRoom) {
-                const state = roomYoutubeStates[newRoom] || { videoId: null, isPlaying: false, timestamp: 0, isRepeat: false };
-                socket.emit("youtubeSync", state);
+                // YouTube状態同期
+                const ytState = roomYoutubeStates[newRoom] || { videoId: null, isPlaying: false, timestamp: 0, isRepeat: false };
+                socket.emit("youtubeSync", ytState);
+
+                // 画面共有状態同期
+                if (roomScreenShares[newRoom]) {
+                    // 誰かが共有中なら通知
+                    socket.emit("screenShareSync", { sharerId: roomScreenShares[newRoom] });
+                } else {
+                    socket.emit("screenShareSync", { sharerId: null });
+                }
+            }
+
+            // 前の部屋で共有していたら停止させる
+            if (oldRoom && roomScreenShares[oldRoom] === socket.id) {
+                delete roomScreenShares[oldRoom];
+                io.emit("screenShareSync", { sharerId: null, roomId: oldRoom });
             }
         }
     });
 
-    // YouTube制御 (部屋IDを含めて受信)
+    // YouTube制御
     socket.on("changeYoutube", (data) => {
-        // data = { roomId, videoId, isPlaying, timestamp, isRepeat }
         if (data.roomId) {
             roomYoutubeStates[data.roomId] = data;
-            // 全員に送るが、クライアント側で自分の部屋か判定させる
-            // (本来はsocket.join/toを使うべきだが、今回は既存ロジックに合わせてブロードキャストし、クライアントでフィルタリング)
             io.emit("youtubeSync", data);
         }
     });
 
+    // ★画面共有の状態変更通知
+    socket.on("updateScreenShare", (data) => {
+        // data = { roomId, isSharing }
+        if (data.roomId) {
+            if (data.isSharing) {
+                roomScreenShares[data.roomId] = socket.id;
+            } else {
+                if (roomScreenShares[data.roomId] === socket.id) {
+                    delete roomScreenShares[data.roomId];
+                }
+            }
+            // 全員に「この部屋で誰が共有しているか（または誰もしていないか）」を通知
+            io.emit("screenShareSync", { 
+                roomId: data.roomId, 
+                sharerId: data.isSharing ? socket.id : null 
+            });
+        }
+    });
+
     socket.on("disconnect", () => {
+        // 切断時に画面共有情報をクリア
+        const userRoom = users[socket.id]?.roomId;
+        if (userRoom && roomScreenShares[userRoom] === socket.id) {
+            delete roomScreenShares[userRoom];
+            io.emit("screenShareSync", { roomId: userRoom, sharerId: null });
+        }
         delete users[socket.id];
         io.emit("updateUsers", users);
     });
