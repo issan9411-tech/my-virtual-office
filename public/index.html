@@ -67,7 +67,7 @@
         #micBtn { background: #e74c3c; width: 120px; }
         #exitBtn { background: #7f8c8d; }
         .zoom-btn { background: #34495e; font-size: 18px; width: 40px; }
-        #ytBtn { background: #FF0000; color: white; }
+        #ytBtn { background: #FF0000; color: white; display: none; /* 初期非表示 */ }
 
         #room-status { position: absolute; top: 20px; left: 100px; padding: 10px 20px; background: #e67e22; color: white; font-weight: bold; border-radius: 30px; display: none; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
         
@@ -94,12 +94,10 @@
             cursor: pointer;
             overflow: hidden;
         }
-        /* 拡大モード */
         #screen-share-container.large {
             top: 50%; left: 50%; transform: translate(-50%, -50%);
             width: 80%; height: 80%;
         }
-        /* 縮小モード (デフォルト) */
         #screen-share-container.small {
             bottom: 90px; right: 20px;
             width: 320px; height: 180px;
@@ -128,8 +126,8 @@
 
     <div id="youtube-modal" class="modal-overlay" style="display: none;">
         <div class="panel">
-            <h3>🎵 YouTube (共有BGM)</h3>
-            <p style="font-size:13px; color:#666;">入力したURLの音声がフロア全員に共有されます。</p>
+            <h3>🎵 会議室BGM (YouTube)</h3>
+            <p style="font-size:13px; color:#666;">入力したURLの音声が<br><b>この会議室の全員</b>に共有されます。</p>
             <label>YouTube URL</label>
             <input type="text" id="ytUrl" placeholder="https://www.youtube.com/watch?v=...">
             
@@ -225,6 +223,7 @@
         
         <button class="ctrl-btn" style="background:#e67e22;" onclick="openTimer()">⏳ タイマー</button>
         <button id="micBtn" class="ctrl-btn" onclick="toggleMic()">マイクOFF</button>
+        
         <button id="ytBtn" class="ctrl-btn" onclick="document.getElementById('youtube-modal').style.display='flex'">▶️ Youtube</button>
 
         <button id="leaveRoomBtn" class="ctrl-btn" onclick="leaveMeetingRoom()" style="display:none; background:#e67e22;">退室</button>
@@ -233,7 +232,6 @@
 
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-    <script src="https://www.youtube.com/iframe_api"></script>
     <script src="script.js"></script>
 </body>
 </html>

@@ -9,21 +9,15 @@ app.use(express.static("public"));
 app.use(express.static(__dirname));
 
 let users = {};
-// YouTubeの現在の状態を保存する変数
-let currentYoutube = {
-    videoId: null,
-    isPlaying: false,
-    mode: 'video', // 'video' or 'audio'
-    timestamp: 0
-};
+
+// ★部屋ごとのYouTube状態を保存するオブジェクト
+// キー: roomId, 値: { videoId, isPlaying, timestamp, isRepeat }
+let roomYoutubeStates = {};
 
 io.on("connection", (socket) => {
     // 初期データ
     users[socket.id] = { x: 1400, y: 900, peerId: null, name: "ゲスト", roomId: null };
     
-    // 接続時に現在のYouTube状態を送る
-    socket.emit("youtubeSync", currentYoutube);
-
     socket.emit("updateUsers", users);
 
     socket.on("enterRoom", (data) => {
@@ -36,18 +30,32 @@ io.on("connection", (socket) => {
 
     socket.on("move", (data) => {
         if (users[socket.id]) {
+            const oldRoom = users[socket.id].roomId;
+            const newRoom = data.roomId;
+            
             users[socket.id].x = data.x;
             users[socket.id].y = data.y;
-            users[socket.id].roomId = data.roomId;
+            users[socket.id].roomId = newRoom;
+            
             io.emit("updateUsers", users);
+
+            // 新しい部屋に入った場合、その部屋のYouTube状態を送る
+            if (newRoom && newRoom !== oldRoom) {
+                const state = roomYoutubeStates[newRoom] || { videoId: null, isPlaying: false, timestamp: 0, isRepeat: false };
+                socket.emit("youtubeSync", state);
+            }
         }
     });
 
-    // YouTube制御
+    // YouTube制御 (部屋IDを含めて受信)
     socket.on("changeYoutube", (data) => {
-        currentYoutube = data;
-        // 全員に同期信号を送る
-        io.emit("youtubeSync", currentYoutube);
+        // data = { roomId, videoId, isPlaying, timestamp, isRepeat }
+        if (data.roomId) {
+            roomYoutubeStates[data.roomId] = data;
+            // 全員に送るが、クライアント側で自分の部屋か判定させる
+            // (本来はsocket.join/toを使うべきだが、今回は既存ロジックに合わせてブロードキャストし、クライアントでフィルタリング)
+            io.emit("youtubeSync", data);
+        }
     });
 
     socket.on("disconnect", () => {
