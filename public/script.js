@@ -9,7 +9,7 @@ let myId = null;
 let myScreenStream = null;
 let isScreenSharing = false;
 let myCombinedStream = null;
-let remoteScreenSharerId = null; // ★現在画面を見せている人のID
+let remoteScreenSharerId = null;
 
 // YouTube
 let youtubePlayer = null;
@@ -189,17 +189,31 @@ function startSocketConnection() {
         }
     });
 
-    // ★重要: 画面共有の状態同期
+    // ★画面共有の同期 (受信側)
     socket.on('screenShareSync', (data) => {
         if (data.roomId === myRoomId) {
-            // nullが来たら、誰が共有していようと強制リセット
-            if (!data.sharerId) {
+            
+            // 共有者が変わった、または終了した場合
+            if (data.sharerId !== remoteScreenSharerId) {
+                
+                // 1. まず表示を消す
                 closeScreenShareWindow();
-            } 
-            // IDが変わったらリセットして更新
-            else if (data.sharerId !== remoteScreenSharerId) {
-                closeScreenShareWindow();
+                
+                // 2. 以前の共有者との接続を強制切断 (これが重要)
+                if (remoteScreenSharerId && activeCalls[remoteScreenSharerId]) {
+                    activeCalls[remoteScreenSharerId].close();
+                    delete activeCalls[remoteScreenSharerId];
+                }
+                
+                // 3. もし自分が共有中だったのに、他人が共有権を取った場合、自分を止める
+                if (isScreenSharing && data.sharerId && data.sharerId !== myId) {
+                    stopScreenShare(false); // 通知せずに停止
+                }
+
+                // 4. ID更新
                 remoteScreenSharerId = data.sharerId;
+                
+                // 5. 新しい共有者との接続は manageConnections が行う
             }
         }
     });
@@ -232,7 +246,7 @@ async function toggleScreenShare() {
     if (!myRoomId) { alert("画面共有は会議室の中でのみ使用できます"); return; }
 
     if (isScreenSharing) {
-        stopScreenShare();
+        stopScreenShare(true);
     } else {
         try {
             const withAudio = document.getElementById('ssAudioCheck').checked;
@@ -242,36 +256,32 @@ async function toggleScreenShare() {
             const videoTrack = myScreenStream.getVideoTracks()[0];
             const micTrack = myStream.getAudioTracks()[0];
             
-            // 音声ミックス
+            // シンプルなトラック結合 (スマホ互換性重視)
             let tracks = [videoTrack, micTrack];
             if (withAudio && myScreenStream.getAudioTracks().length > 0) {
                 tracks.push(myScreenStream.getAudioTracks()[0]);
             }
             myCombinedStream = new MediaStream(tracks);
 
-            // OSの停止ボタンが押された時
-            videoTrack.onended = () => {
-                stopScreenShare();
-            };
+            videoTrack.onended = () => stopScreenShare(true);
 
             isScreenSharing = true;
             const btn = document.getElementById('screenShareBtn');
             if(btn) { btn.innerText = "📺 共有停止"; btn.style.background = "#e74c3c"; }
 
-            // サーバーへ「開始」を通知
+            // サーバーへ開始を通知
             socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: true });
 
-            // 全員と再接続して合成ストリームを送る
             reconnectEveryone();
 
         } catch (err) {
-            console.error("ScreenShare Error:", err);
+            console.error(err);
             isScreenSharing = false;
         }
     }
 }
 
-function stopScreenShare() {
+function stopScreenShare(notifyServer) {
     if (myScreenStream) {
         myScreenStream.getTracks().forEach(t => t.stop());
         myScreenStream = null;
@@ -282,15 +292,14 @@ function stopScreenShare() {
     const btn = document.getElementById('screenShareBtn');
     if(btn) { btn.innerText = "📺 画面共有"; btn.style.background = "#3498db"; }
     
-    // ★重要: サーバーへ「停止」を通知 (これにより他人の画面が消える)
-    if(myRoomId) socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: false });
+    if(notifyServer && myRoomId) {
+        socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: false });
+    }
 
-    // 全員と再接続 (マイク音声のみに戻す)
     reconnectEveryone();
 }
 
 function reconnectEveryone() {
-    // 全ての通話を切断 -> manageConnections が自動的に再発信
     Object.values(activeCalls).forEach(call => call.close());
     activeCalls = {};
 }
@@ -304,7 +313,6 @@ function toggleScreenSize() {
     }
 }
 
-// ★画面共有ウィンドウを閉じて変数をリセットする関数
 function closeScreenShareWindow() {
     const videoEl = document.getElementById('screen-share-video');
     const container = document.getElementById('screen-share-container');
@@ -313,7 +321,7 @@ function closeScreenShareWindow() {
         videoEl.srcObject = null;
         videoEl.load();
     }
-    remoteScreenSharerId = null; // ここでIDを消すのが重要
+    // remoteScreenSharerId は socketイベントで制御するためここでは消さない
 }
 
 // ============================
@@ -414,7 +422,6 @@ function manageConnections() {
         if (shouldConnect) {
             if (!activeCalls[u.peerId]) {
                 if (myPeer.id > u.peerId) {
-                    // 発信側: 画面共有中なら合成ストリームを使用
                     const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
                     console.log("発信:", u.name);
                     const call = myPeer.call(u.peerId, streamToSend);
@@ -432,7 +439,6 @@ function manageConnections() {
         }
     });
 
-    // ユーザー削除時の掃除
     Object.keys(activeCalls).forEach(peerId => {
         const isUserExists = Object.values(users).some(u => u.peerId === peerId);
         if (!isUserExists) {
@@ -445,15 +451,8 @@ function manageConnections() {
 
 function setupCallEvents(call) {
     call.on('stream', remoteStream => {
-        const videoTracks = remoteStream.getVideoTracks();
-        
-        // ★映像トラックがある場合 = 画面共有
-        if (videoTracks.length > 0) {
-            // 他の共有状態をクリアして新しいのを表示
-            if (remoteScreenSharerId && remoteScreenSharerId !== call.peer) {
-                closeScreenShareWindow();
-            }
-
+        // ★映像トラックがあれば画面共有
+        if (remoteStream.getVideoTracks().length > 0) {
             const container = document.getElementById('screen-share-container');
             const videoEl = document.getElementById('screen-share-video');
             
@@ -461,17 +460,12 @@ function setupCallEvents(call) {
                 videoEl.srcObject = remoteStream;
                 container.style.display = 'block';
                 videoEl.play().catch(e => console.log("Play error:", e));
-                remoteScreenSharerId = call.peer;
             }
         } else {
-            // ★音声のみ (通常会話)
+            // ★音声のみ (Video+Audio共有の Audio もここで処理される可能性があるが、Videoタグで賄えるならそちら優先)
+            // 重複しないようにチェック
             if (document.getElementById("audio-" + call.peer)) return;
             
-            // もしこの人が以前画面共有していたなら、音声のみになった時点で画面を消す
-            if(remoteScreenSharerId === call.peer) {
-                closeScreenShareWindow();
-            }
-
             const audio = document.createElement('audio');
             audio.id = "audio-" + call.peer;
             audio.srcObject = remoteStream;
@@ -496,7 +490,7 @@ function removeMediaElements(peerId) {
     const el = document.getElementById("audio-" + peerId);
     if (el) el.remove();
     
-    // 該当ユーザーが画面共有者だった場合、画面を消す
+    // もしその人が画面共有者だったら閉じる
     if (remoteScreenSharerId === peerId) {
         closeScreenShareWindow();
     }
@@ -519,17 +513,18 @@ function updateVolumes() {
             }
         }
 
-        // Audioタグ
         const audioEl = document.getElementById("audio-" + u.peerId);
         if (audioEl) {
             if (volume <= 0.01) audioEl.muted = true;
             else { audioEl.muted = false; audioEl.volume = volume; }
         }
         
-        // Videoタグ (画面共有音声)
+        // 画面共有者のビデオ音声も制御
         if (remoteScreenSharerId === u.peerId) {
             const videoEl = document.getElementById('screen-share-video');
             if(videoEl) {
+                // スマホはmutedでないと再生されない場合があるため、表示時は音声をaudioタグに任せる手もあるが、
+                // 結合ストリームの場合はvideoタグから音が出る
                 if(volume <= 0.01) videoEl.muted = true;
                 else { videoEl.muted = false; videoEl.volume = volume; }
             }
@@ -664,7 +659,7 @@ function showRoomModal(room) {
 function closeRoomModal() { document.getElementById('room-modal').style.display = 'none'; }
 
 function leaveMeetingRoom() {
-    if(isScreenSharing) stopScreenShare();
+    if(isScreenSharing) stopScreenShare(true);
     myRoomId = null;
     moveMe(1300, 900);
     document.getElementById('leaveRoomBtn').style.display = 'none';
@@ -822,6 +817,9 @@ async function applySettings() {
     closeSettings();
 }
 
+// ============================
+// 9. メイン描画ループ
+// ============================
 function loop() { draw(); requestAnimationFrame(loop); }
 
 function draw() {
