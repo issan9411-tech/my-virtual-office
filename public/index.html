@@ -67,8 +67,7 @@
         #micBtn { background: #e74c3c; width: 120px; }
         #exitBtn { background: #7f8c8d; }
         .zoom-btn { background: #34495e; font-size: 18px; width: 40px; }
-        /* YouTubeボタン */
-        #ytBtn { background: #FF0000; color: white; display: flex; align-items: center; gap: 5px; }
+        #ytBtn { background: #FF0000; color: white; }
 
         #room-status { position: absolute; top: 20px; left: 100px; padding: 10px 20px; background: #e67e22; color: white; font-weight: bold; border-radius: 30px; display: none; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
         
@@ -79,27 +78,23 @@
         #timer-display { font-size: 48px; font-weight: bold; color: #2c3e50; margin: 20px 0; }
         .timer-status { font-size: 18px; font-weight: bold; color: #e67e22; }
 
-        /* YouTubeプレイヤー (非表示時は画面外へ) */
+        /* YouTubeプレイヤー (非表示・音声のみ) */
         #youtube-container {
-            position: absolute; bottom: 80px; right: 20px; 
-            width: 320px; height: 180px; 
-            background: black; z-index: 40; 
-            border: 2px solid #fff; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-            display: none; /* 初期非表示 */
+            position: absolute; width: 1px; height: 1px; 
+            opacity: 0; pointer-events: none; 
+            overflow: hidden; top: 0; left: 0; z-index: -1;
         }
-        /* 音声のみモードの時は透明にするがDOMには残す */
-        .yt-audio-only { opacity: 0; pointer-events: none; }
 
-        /* 画面共有コンテナ */
+        /* 画面共有コンテナ (会議室の上に表示) */
         #screen-share-container {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            max-width: 80%; max-height: 80%; z-index: 45; pointer-events: none;
-            display: flex; justify-content: center; align-items: center;
+            width: 80%; height: 80%; z-index: 45; pointer-events: none;
+            display: none; justify-content: center; align-items: center;
         }
         #screen-share-video {
-            width: 100%; height: auto; border: 5px solid #3498db; 
-            border-radius: 8px; box-shadow: 0 0 50px rgba(52, 152, 219, 0.5);
-            display: none; background: black;
+            max-width: 100%; max-height: 100%; 
+            border: 5px solid #3498db; border-radius: 8px; 
+            box-shadow: 0 0 50px rgba(0,0,0,0.8); background: #000;
         }
     </style>
 </head>
@@ -116,18 +111,12 @@
 
     <div id="youtube-modal" class="modal-overlay" style="display: none;">
         <div class="panel">
-            <h3>📺 YouTube共有</h3>
-            <label>YouTubeのURL</label>
+            <h3>🎵 YouTube (共有BGM)</h3>
+            <p style="font-size:13px; color:#666;">入力したURLの音声がフロア全員に共有されます。<br>(会議室や集中モードの人は除く)</p>
+            <label>YouTube URL</label>
             <input type="text" id="ytUrl" placeholder="https://www.youtube.com/watch?v=...">
-            
-            <label>再生モード</label>
-            <select id="ytMode">
-                <option value="video">映像 + 音声</option>
-                <option value="audio">音声のみ (BGMとして利用)</option>
-            </select>
-
-            <button class="btn btn-red" onclick="startYoutube()">再生 / 共有開始</button>
-            <button class="btn btn-gray" onclick="stopYoutube()">停止</button>
+            <button class="btn btn-red" onclick="startYoutube()">▶️ 再生 / 共有</button>
+            <button class="btn btn-gray" onclick="stopYoutube()">⏹ 停止</button>
             <button onclick="document.getElementById('youtube-modal').style.display='none'" class="btn btn-gray" style="margin-top:20px;">閉じる</button>
         </div>
     </div>
@@ -169,7 +158,6 @@
             </select>
             <label>BGM音量</label>
             <input type="range" id="bgmVolume" min="0" max="1" step="0.1" value="0.3">
-            <p style="font-size:12px; color:#7f8c8d;">※休憩(5分)に入ると自動で休憩BGMに切り替わります</p>
             <button id="timerStartBtn" class="btn btn-green" onclick="toggleTimer()">スタート</button>
             <button class="btn btn-gray" onclick="resetTimer()">リセット</button>
             <button onclick="closeTimer()" class="btn btn-gray" style="margin-top:20px;">閉じる</button>
@@ -192,7 +180,8 @@
     </div>
 
     <div id="youtube-container">
-        <div id="player"></div> </div>
+        <div id="player"></div> 
+    </div>
 
     <canvas id="gameCanvas"></canvas>
 
