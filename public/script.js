@@ -20,11 +20,14 @@ let myX = 1400, myY = 900;
 let myName = "ゲスト";
 let myRoomId = null; 
 let isMicMutedByUser = true;
+
+// ★重要: AudioContextはグローバルで1つだけ管理する (Macの重さを解消)
 let audioContext = null; 
 let currentSpeakerId = "";
 
 // BGMノード
-let bgmSourceNode = null, bgmGainNode = null;
+let bgmSourceNode = null;
+let bgmGainNode = null;
 const bgmAudio = new Audio();
 bgmAudio.loop = true; 
 bgmAudio.crossOrigin = "anonymous";
@@ -86,7 +89,6 @@ window.addEventListener('load', () => {
         });
     }
     
-    // YouTube音量
     const ytVolume = document.getElementById('ytVolume');
     if(ytVolume) {
         ytVolume.addEventListener('input', (e) => {
@@ -96,16 +98,19 @@ window.addEventListener('load', () => {
         });
     }
 
+    // タブ復帰時の処理
     document.addEventListener('visibilitychange', () => { 
         if (document.visibilityState === 'visible') ensureAudioContext(); 
     });
+    // ユーザー操作時に必ずオーディオコンテキストを再開(Mac対策)
     document.body.addEventListener('click', ensureAudioContext, {once: false});
     document.body.addEventListener('touchstart', ensureAudioContext, {once: false, passive: true});
 });
 
+// ★AudioContextの管理を一元化 (Macでの多重起動による遅延を防止)
 function ensureAudioContext() {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
+    if (!AC) return null;
     
     if (!audioContext) {
         audioContext = new AC();
@@ -115,17 +120,22 @@ function ensureAudioContext() {
         audioContext.resume().catch(e => {});
     }
 
-    if (!bgmSourceNode && audioContext) {
+    // BGM用ノード接続 (未接続なら接続)
+    if (!bgmSourceNode) {
         try {
             bgmSourceNode = audioContext.createMediaElementSource(bgmAudio);
             bgmGainNode = audioContext.createGain();
+            
             const volInput = document.getElementById('bgmVolume');
             if(volInput) bgmGainNode.gain.value = parseFloat(volInput.value);
             
             bgmSourceNode.connect(bgmGainNode);
             bgmGainNode.connect(audioContext.destination);
-        } catch(e) {}
+        } catch(e) {
+            // 既に接続されている場合のエラーは無視
+        }
     }
+    return audioContext;
 }
 
 // YouTube API
@@ -140,13 +150,10 @@ function onYouTubeIframeAPIReady() {
     });
 }
 
-function onPlayerReady() { 
-    checkYoutubeStatus(); 
-}
+function onPlayerReady() { checkYoutubeStatus(); }
 
 function onPlayerStateChange(event) {
     if (event.data === YT.PlayerState.ENDED) {
-        // リピート処理
         if (currentYoutubeState.isRepeat && myRoomId === currentYoutubeState.roomId) {
             currentYoutubeState.timestamp = Date.now();
             currentYoutubeState.isPlaying = true;
@@ -167,6 +174,7 @@ async function startSetup() {
         const micSelect = document.getElementById('micSelect');
         if(micSelect) {
             micSelect.addEventListener('change', () => startMicTest('micSelect', 'mic-visualizer-bar-entry'));
+            // 初回テスト実行
             startMicTest('micSelect', 'mic-visualizer-bar-entry');
         }
     } catch (err) { 
@@ -175,7 +183,7 @@ async function startSetup() {
 }
 
 // ============================
-// 2. 入室 & 通信開始
+// 2. 入室処理
 // ============================
 document.getElementById('enterGameBtn').addEventListener('click', async () => {
     const nameInput = document.getElementById('username');
@@ -207,8 +215,6 @@ function startSocketConnection() {
     socket = io();
     socket.on('connect', () => { myId = socket.id; });
     socket.on('updateUsers', (data) => { users = data; updateVolumes(); });
-    
-    // YouTube同期 (部屋IDチェック付き)
     socket.on('youtubeSync', (data) => {
         if (data.roomId === myRoomId) {
             currentYoutubeState = data;
@@ -342,7 +348,6 @@ function toggleYoutubeRepeat() {
         btn.innerText = "🔁 リピートOFF"; btn.className = "btn btn-gray";
     }
     
-    // 設定変更を送信
     if (myRoomId) {
         currentYoutubeState.roomId = myRoomId;
         socket.emit('changeYoutube', currentYoutubeState);
@@ -352,7 +357,7 @@ function toggleYoutubeRepeat() {
 function checkYoutubeStatus() {
     if (!youtubePlayer || !youtubePlayer.loadVideoById) return;
 
-    // 条件: YouTube再生中 かつ 自分がその部屋にいる かつ タイマー停止中
+    const myZone = getCurrentZone();
     const shouldPlay = currentYoutubeState.isPlaying && 
                        (currentYoutubeState.roomId === myRoomId) && 
                        !isTimerRunning;
@@ -439,6 +444,9 @@ function setupCallEvents(call) {
                 videoEl.srcObject = remoteStream;
                 container.style.display = 'block';
                 currentScreenSharerId = call.peer;
+                
+                // ★Mac対策: 明示的に再生命令を出す
+                videoEl.play().catch(e => console.log("Auto-play blocked:", e));
             }
         } else {
             // 音声のみ
@@ -603,13 +611,12 @@ function showRoomModal(room) {
     document.getElementById('room-title').innerText = room.name;
     document.getElementById('room-info').innerText = `定員: ${count}/${room.capacity}`;
     document.getElementById('room-modal').style.display = 'flex';
+    
     const joinBtn = document.getElementById('joinRoomBtn');
     const newBtn = joinBtn.cloneNode(true);
     joinBtn.parentNode.replaceChild(newBtn, joinBtn);
     newBtn.onclick = async () => {
         ensureAudioContext(); myRoomId = room.id;
-        
-        // ★会議室に入ったらYouTube APIを読み込む
         loadYoutubeApi();
 
         myX = room.x + room.w/2 - 50 + Math.random()*100;
@@ -716,10 +723,12 @@ function startMicTest(selectId, barId) {
     const micId = document.getElementById(selectId).value;
     if (!micId) return;
     
+    // ★ここでもグローバル audioContext を使う (Mac最適化)
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+
     navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } })
     .then(s => {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        const ctx = new AC();
         const src = ctx.createMediaStreamSource(s);
         const anl = ctx.createAnalyser();
         anl.fftSize = 256;
@@ -731,37 +740,31 @@ function startMicTest(selectId, barId) {
             // モーダルが両方閉じているなら停止
             const m1 = document.getElementById('entry-modal');
             const m2 = document.getElementById('settings-modal');
-            
             if (m1 && m2 && m1.style.display === 'none' && m2.style.display === 'none') {
                 s.getTracks().forEach(t => t.stop());
-                ctx.close();
+                // ※ctxはグローバルなのでcloseしない！
                 return;
             }
-            
             anl.getByteFrequencyData(data);
             let sum = 0;
             for (let i = 0; i < data.length; i++) sum += data[i];
-            
-            if (bar) {
-                // 簡易的なビジュアライザ
-                bar.style.width = Math.min(100, (sum / data.length) * 3) + '%';
-            }
+            if (bar) bar.style.width = Math.min(100, (sum / data.length) * 3) + '%';
             requestAnimationFrame(upd);
         };
         upd();
     })
-    .catch(e => {
-        console.error("Mic test error:", e);
-    });
+    .catch(e => {});
 }
 
 function testSpeaker() {
-    ensureAudioContext();
-    const osc = audioContext.createOscillator(); 
-    osc.connect(audioContext.destination); 
-    osc.frequency.value = 523.25; 
-    osc.start(); 
-    osc.stop(audioContext.currentTime + 0.3);
+    const ctx = ensureAudioContext();
+    if(ctx) {
+        const osc = ctx.createOscillator(); 
+        osc.connect(ctx.destination); 
+        osc.frequency.value = 523.25; 
+        osc.start(); 
+        osc.stop(ctx.currentTime + 0.3);
+    }
 }
 
 function openSettings() { 
@@ -779,9 +782,7 @@ function openSettings() {
     document.getElementById('settings-modal').style.display = 'flex'; 
 }
 
-function closeSettings() { 
-    document.getElementById('settings-modal').style.display = 'none'; 
-}
+function closeSettings() { document.getElementById('settings-modal').style.display = 'none'; }
 
 async function applySettings() {
     const micId = document.getElementById('micSelectInGame').value;
@@ -792,26 +793,20 @@ async function applySettings() {
             const newStream = await navigator.mediaDevices.getUserMedia({
                 audio: { 
                     deviceId: { exact: micId }, 
-                    echoCancellation: true, 
-                    noiseSuppression: true, 
-                    autoGainControl: true, 
-                    channelCount: 1, 
-                    sampleRate: 16000 
+                    echoCancellation: true, noiseSuppression: true, autoGainControl: true, 
+                    channelCount: 1, sampleRate: 16000 
                 }
             });
             if (myStream) myStream.getTracks().forEach(t => t.stop());
             myStream = newStream;
             setMicState(!isMicMutedByUser); 
             
-            // 既存接続のストリームを置換
             Object.values(activeCalls).forEach(call => {
                 const sender = call.peerConnection.getSenders().find(s => s.track.kind === 'audio');
                 if (sender) sender.replaceTrack(newStream.getAudioTracks()[0]);
             });
             alert("設定適用完了");
-        } catch (e) { 
-            alert("失敗: " + e); 
-        }
+        } catch (e) { alert("失敗: " + e); }
     }
     
     if (spkId) {
@@ -819,7 +814,7 @@ async function applySettings() {
         document.querySelectorAll('audio').forEach(a => {
             if (a.setSinkId) a.setSinkId(spkId).catch(e=>{});
         });
-        if (bgmAudio.setSinkId) bgmAudio.setSinkId(spkId).catch(e=>{});
+        if(bgmAudio.setSinkId) bgmAudio.setSinkId(spkId).catch(e=>{});
     }
     closeSettings();
 }
@@ -833,15 +828,11 @@ function loop() {
 }
 
 function draw() {
-    // 画面クリア
     ctx.setTransform(1, 0, 0, 1, 0, 0); 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // 背景塗りつぶし
     ctx.fillStyle = "#2c3e50"; 
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // カメラ位置計算
     const visibleW = canvas.width / cameraScale;
     const visibleH = canvas.height / cameraScale;
     
@@ -851,12 +842,10 @@ function draw() {
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
     camY = Math.max(0, Math.min(camY, WORLD_H - visibleH));
 
-    // カメラ適用
     ctx.save();
     ctx.scale(cameraScale, cameraScale);
     ctx.translate(-camX, -camY);
 
-    // 背景画像
     if (bgImage.complete) {
         ctx.drawImage(bgImage, 0, 0, WORLD_W, WORLD_H);
     } else {
@@ -864,7 +853,6 @@ function draw() {
         ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     }
 
-    // 会議室の描画
     MEETING_ROOMS.forEach(r => {
         ctx.fillStyle = "rgba(41, 128, 185, 0.2)"; 
         ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -878,7 +866,6 @@ function draw() {
         ctx.fillText(r.name, r.x + 30, r.y + 40);
     });
 
-    // 禁止エリア描画
     ctx.fillStyle = "rgba(231, 76, 60, 0.1)"; 
     ctx.fillRect(750, 0, 700, 450); 
     
@@ -890,7 +877,6 @@ function draw() {
     ctx.font = "bold 20px sans-serif"; 
     ctx.fillText("🚫 会話禁止 (Focus Zone)", 900, 60);
 
-    // 会話範囲の描画 (リビングにいる時のみ)
     if (!myRoomId && getCurrentZone() === ZONES.LIVING) {
         ctx.beginPath();
         ctx.arc(myX, myY, TALK_DISTANCE, 0, Math.PI * 2);
@@ -901,23 +887,19 @@ function draw() {
         ctx.stroke();
     }
 
-    // ユーザーの描画
     Object.keys(users).forEach(id => {
         const u = users[id];
         
-        // 影
         ctx.shadowColor = "rgba(0,0,0,0.3)"; 
         ctx.shadowBlur = 10;
         
-        // アバター本体
         ctx.fillStyle = (id === myId) ? '#e74c3c' : '#3498db';
         ctx.beginPath(); 
         ctx.arc(u.x, u.y, 20, 0, Math.PI * 2); 
         ctx.fill();
         
-        ctx.shadowBlur = 0; // テキストには影をつけない
+        ctx.shadowBlur = 0; 
         
-        // 名前
         ctx.fillStyle = "#fff"; 
         ctx.strokeStyle = "#000"; 
         ctx.lineWidth = 3;
@@ -927,7 +909,6 @@ function draw() {
         ctx.strokeText(u.name, u.x, u.y - 30);
         ctx.fillText(u.name, u.x, u.y - 30);
         
-        // 会議中アイコン
         if (u.roomId) {
             ctx.fillText("🔒", u.x, u.y - 45);
         }
