@@ -9,13 +9,22 @@ app.use(express.static("public"));
 app.use(express.static(__dirname));
 
 let users = {};
+// YouTubeの現在の状態を保存する変数
+let currentYoutube = {
+    videoId: null,
+    isPlaying: false,
+    mode: 'video', // 'video' or 'audio'
+    timestamp: 0
+};
 
 io.on("connection", (socket) => {
     // 初期データ
-    // roomId: null (通常エリア), 'roomA', 'roomB' (会議室)
-    users[socket.id] = { x: 100, y: 300, peerId: null, name: "ゲスト", roomId: null };
+    users[socket.id] = { x: 1400, y: 900, peerId: null, name: "ゲスト", roomId: null };
+    
+    // 接続時に現在のYouTube状態を送る
+    socket.emit("youtubeSync", currentYoutube);
 
-    io.emit("updateUsers", users);
+    socket.emit("updateUsers", users);
 
     socket.on("enterRoom", (data) => {
         if (users[socket.id]) {
@@ -25,14 +34,20 @@ io.on("connection", (socket) => {
         }
     });
 
-    // 移動と部屋情報の更新
     socket.on("move", (data) => {
         if (users[socket.id]) {
             users[socket.id].x = data.x;
             users[socket.id].y = data.y;
-            users[socket.id].roomId = data.roomId; // 部屋情報を保存
+            users[socket.id].roomId = data.roomId;
             io.emit("updateUsers", users);
         }
+    });
+
+    // YouTube制御
+    socket.on("changeYoutube", (data) => {
+        currentYoutube = data;
+        // 全員に同期信号を送る
+        io.emit("youtubeSync", currentYoutube);
     });
 
     socket.on("disconnect", () => {
