@@ -9,7 +9,7 @@ let myId = null;
 let myScreenStream = null;
 let isScreenSharing = false;
 let myCombinedStream = null;
-let remoteScreenSharerId = null;
+let remoteScreenSharerId = null; // ★現在画面を見せている人のID
 
 // YouTube
 let youtubePlayer = null;
@@ -189,14 +189,15 @@ function startSocketConnection() {
         }
     });
 
-    // 画面共有の同期 (重要: ここで前の人の画面を消す)
+    // ★重要: 画面共有の状態同期
     socket.on('screenShareSync', (data) => {
         if (data.roomId === myRoomId) {
+            // nullが来たら、誰が共有していようと強制リセット
             if (!data.sharerId) {
-                // 誰も共有していない -> 画面を閉じる
                 closeScreenShareWindow();
-            } else if (data.sharerId !== remoteScreenSharerId) {
-                // 共有者が変わった -> 一旦閉じて新しいストリームを待つ
+            } 
+            // IDが変わったらリセットして更新
+            else if (data.sharerId !== remoteScreenSharerId) {
                 closeScreenShareWindow();
                 remoteScreenSharerId = data.sharerId;
             }
@@ -235,31 +236,36 @@ async function toggleScreenShare() {
     } else {
         try {
             const withAudio = document.getElementById('ssAudioCheck').checked;
+            
             myScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: withAudio });
             
             const videoTrack = myScreenStream.getVideoTracks()[0];
             const micTrack = myStream.getAudioTracks()[0];
             
+            // 音声ミックス
             let tracks = [videoTrack, micTrack];
             if (withAudio && myScreenStream.getAudioTracks().length > 0) {
                 tracks.push(myScreenStream.getAudioTracks()[0]);
             }
             myCombinedStream = new MediaStream(tracks);
 
-            videoTrack.onended = stopScreenShare;
+            // OSの停止ボタンが押された時
+            videoTrack.onended = () => {
+                stopScreenShare();
+            };
 
             isScreenSharing = true;
             const btn = document.getElementById('screenShareBtn');
             if(btn) { btn.innerText = "📺 共有停止"; btn.style.background = "#e74c3c"; }
 
-            // サーバーへ開始を通知
+            // サーバーへ「開始」を通知
             socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: true });
 
-            // ★全員と再接続
+            // 全員と再接続して合成ストリームを送る
             reconnectEveryone();
 
         } catch (err) {
-            console.error(err);
+            console.error("ScreenShare Error:", err);
             isScreenSharing = false;
         }
     }
@@ -276,17 +282,17 @@ function stopScreenShare() {
     const btn = document.getElementById('screenShareBtn');
     if(btn) { btn.innerText = "📺 画面共有"; btn.style.background = "#3498db"; }
     
-    // サーバーへ終了を通知
+    // ★重要: サーバーへ「停止」を通知 (これにより他人の画面が消える)
     if(myRoomId) socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: false });
 
-    // ★全員と再接続 (音声のみに戻す)
+    // 全員と再接続 (マイク音声のみに戻す)
     reconnectEveryone();
 }
 
 function reconnectEveryone() {
+    // 全ての通話を切断 -> manageConnections が自動的に再発信
     Object.values(activeCalls).forEach(call => call.close());
     activeCalls = {};
-    // activeCallsを空にすることで、manageConnectionsが自動的に再発信を行う
 }
 
 function toggleScreenSize() {
@@ -298,6 +304,7 @@ function toggleScreenSize() {
     }
 }
 
+// ★画面共有ウィンドウを閉じて変数をリセットする関数
 function closeScreenShareWindow() {
     const videoEl = document.getElementById('screen-share-video');
     const container = document.getElementById('screen-share-container');
@@ -306,7 +313,7 @@ function closeScreenShareWindow() {
         videoEl.srcObject = null;
         videoEl.load();
     }
-    remoteScreenSharerId = null;
+    remoteScreenSharerId = null; // ここでIDを消すのが重要
 }
 
 // ============================
@@ -405,10 +412,9 @@ function manageConnections() {
         }
 
         if (shouldConnect) {
-            // まだ通話オブジェクトがない場合、自分からかける
-            // (重複防止のため PeerID の大小比較で片方からのみ発信)
             if (!activeCalls[u.peerId]) {
                 if (myPeer.id > u.peerId) {
+                    // 発信側: 画面共有中なら合成ストリームを使用
                     const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
                     console.log("発信:", u.name);
                     const call = myPeer.call(u.peerId, streamToSend);
@@ -417,7 +423,6 @@ function manageConnections() {
                 }
             }
         } else {
-            // 切断すべき相手
             if (activeCalls[u.peerId]) {
                 console.log("切断:", u.name);
                 activeCalls[u.peerId].close();
@@ -427,6 +432,7 @@ function manageConnections() {
         }
     });
 
+    // ユーザー削除時の掃除
     Object.keys(activeCalls).forEach(peerId => {
         const isUserExists = Object.values(users).some(u => u.peerId === peerId);
         if (!isUserExists) {
@@ -441,13 +447,12 @@ function setupCallEvents(call) {
     call.on('stream', remoteStream => {
         const videoTracks = remoteStream.getVideoTracks();
         
+        // ★映像トラックがある場合 = 画面共有
         if (videoTracks.length > 0) {
-            // ★画面共有受信
-            // すでに表示されているなら更新しない (チラつき防止)
-            if(remoteScreenSharerId === call.peer) return;
-
-            // 他の共有を消す
-            closeScreenShareWindow();
+            // 他の共有状態をクリアして新しいのを表示
+            if (remoteScreenSharerId && remoteScreenSharerId !== call.peer) {
+                closeScreenShareWindow();
+            }
 
             const container = document.getElementById('screen-share-container');
             const videoEl = document.getElementById('screen-share-video');
@@ -455,14 +460,14 @@ function setupCallEvents(call) {
             if (videoEl) {
                 videoEl.srcObject = remoteStream;
                 container.style.display = 'block';
-                videoEl.play().catch(e => {}); 
+                videoEl.play().catch(e => console.log("Play error:", e));
                 remoteScreenSharerId = call.peer;
             }
         } else {
-            // ★音声のみ
+            // ★音声のみ (通常会話)
             if (document.getElementById("audio-" + call.peer)) return;
             
-            // 画面共有からの切り替え処理 (映像がなくなったら消す)
+            // もしこの人が以前画面共有していたなら、音声のみになった時点で画面を消す
             if(remoteScreenSharerId === call.peer) {
                 closeScreenShareWindow();
             }
@@ -491,6 +496,7 @@ function removeMediaElements(peerId) {
     const el = document.getElementById("audio-" + peerId);
     if (el) el.remove();
     
+    // 該当ユーザーが画面共有者だった場合、画面を消す
     if (remoteScreenSharerId === peerId) {
         closeScreenShareWindow();
     }
@@ -513,12 +519,14 @@ function updateVolumes() {
             }
         }
 
+        // Audioタグ
         const audioEl = document.getElementById("audio-" + u.peerId);
         if (audioEl) {
             if (volume <= 0.01) audioEl.muted = true;
             else { audioEl.muted = false; audioEl.volume = volume; }
         }
         
+        // Videoタグ (画面共有音声)
         if (remoteScreenSharerId === u.peerId) {
             const videoEl = document.getElementById('screen-share-video');
             if(videoEl) {
@@ -591,7 +599,8 @@ function moveMe(x, y) {
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
         lastMoveTime = now;
     }
-    checkAudioStatus(); checkYoutubeStatus();
+    checkAudioStatus(); 
+    checkYoutubeStatus();
 }
 
 function getCurrentZone() { if (ZONES.SILENT.check(myX, myY)) return ZONES.SILENT; return ZONES.LIVING; }
@@ -619,7 +628,7 @@ function setMicState(isOn) { if (myStream && myStream.getAudioTracks()[0]) myStr
 function exitOffice() { if(confirm("退出しますか？")) location.reload(); }
 
 // ============================
-// 7. モーダル・タイマー
+// 7. モーダル制御
 // ============================
 function showRoomModal(room) {
     const count = Object.values(users).filter(u => u.roomId === room.id).length;
@@ -802,6 +811,7 @@ async function applySettings() {
             alert("設定適用完了");
         } catch (e) { alert("失敗: " + e); }
     }
+    
     if (spkId) {
         currentSpeakerId = spkId;
         document.querySelectorAll('audio').forEach(a => {
@@ -825,6 +835,7 @@ function draw() {
     
     let camX = myX - visibleW / 2;
     let camY = myY - visibleH / 2;
+    
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
     camY = Math.max(0, Math.min(camY, WORLD_H - visibleH));
 
