@@ -47,7 +47,7 @@ io.on("connection", (socket) => {
                 socket.emit("screenShareSync", { roomId: newRoom, sharerId: sharerId });
             }
 
-            // 前の部屋で自分が共有していたら強制解除
+            // 前の部屋で共有していたら強制解除
             if (oldRoom && roomScreenShares[oldRoom] === socket.id) {
                 delete roomScreenShares[oldRoom];
                 io.emit("screenShareSync", { roomId: oldRoom, sharerId: null });
@@ -62,19 +62,19 @@ io.on("connection", (socket) => {
         }
     });
 
-    // 画面共有状態の更新
+    // ★画面共有の状態更新 (確実にリセットする)
     socket.on("updateScreenShare", (data) => {
         if (data.roomId) {
             if (data.isSharing) {
-                // 上書き (新しい人が優先)
+                // 開始: IDを登録
                 roomScreenShares[data.roomId] = socket.id;
             } else {
-                // 停止 (自分が共有者の場合のみ削除)
-                if (roomScreenShares[data.roomId] === socket.id) {
+                // 停止: 該当IDがあれば確実に削除
+                if (roomScreenShares[data.roomId]) {
                     delete roomScreenShares[data.roomId];
                 }
             }
-            // 全員に「今誰が共有しているか(またはnull)」を送信
+            // 全員に「現在の共有者ID（いない場合はnull）」を送信
             io.emit("screenShareSync", { 
                 roomId: data.roomId, 
                 sharerId: roomScreenShares[data.roomId] || null 
