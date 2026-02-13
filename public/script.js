@@ -2,7 +2,7 @@
 // グローバル変数 & 設定
 // ============================
 let socket = null, myPeer = null, myStream = null;
-let users = {}, activeCalls = {}; 
+let users = {}, activeCalls = {}; // PeerID: MediaConnection
 let myId = null;
 
 // 画面共有
@@ -58,7 +58,8 @@ const micBtn = document.getElementById('micBtn');
 // 1. 初期化
 // ============================
 window.addEventListener('load', () => {
-    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
     
     if (isMobile) {
         if(document.getElementById('d-pad')) document.getElementById('d-pad').style.display = 'block';
@@ -188,15 +189,17 @@ function startSocketConnection() {
         }
     });
 
-    // 画面共有同期
+    // 画面共有の同期 (重要: ここで前の人の画面を消す)
     socket.on('screenShareSync', (data) => {
         if (data.roomId === myRoomId) {
-            // 他人が共有停止したら画面を消す
-            if (!data.sharerId && remoteScreenSharerId) {
+            if (!data.sharerId) {
+                // 誰も共有していない -> 画面を閉じる
                 closeScreenShareWindow();
+            } else if (data.sharerId !== remoteScreenSharerId) {
+                // 共有者が変わった -> 一旦閉じて新しいストリームを待つ
+                closeScreenShareWindow();
+                remoteScreenSharerId = data.sharerId;
             }
-            // 誰かが共有開始 -> 後述のcallイベントでストリームを受け取る
-            remoteScreenSharerId = data.sharerId;
         }
     });
 
@@ -204,7 +207,12 @@ function startSocketConnection() {
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
     
     myPeer.on('call', call => {
-        // 現在のストリーム(画面共有中なら合成)を返す
+        // 重複接続の防止
+        if (activeCalls[call.peer]) {
+            activeCalls[call.peer].close();
+            delete activeCalls[call.peer];
+        }
+
         const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
         call.answer(streamToSend);
         setupCallEvents(call);
@@ -217,7 +225,7 @@ function startSocketConnection() {
 }
 
 // ============================
-// 3. 画面共有 (完全リダイヤル・交代バグ修正)
+// 3. 画面共有 (修正版)
 // ============================
 async function toggleScreenShare() {
     if (!myRoomId) { alert("画面共有は会議室の中でのみ使用できます"); return; }
@@ -232,10 +240,9 @@ async function toggleScreenShare() {
             const videoTrack = myScreenStream.getVideoTracks()[0];
             const micTrack = myStream.getAudioTracks()[0];
             
-            // ストリーム合成 (マイク音声を必ず含める)
             let tracks = [videoTrack, micTrack];
             if (withAudio && myScreenStream.getAudioTracks().length > 0) {
-                tracks.push(myScreenStream.getAudioTracks()[0]); // PC音声
+                tracks.push(myScreenStream.getAudioTracks()[0]);
             }
             myCombinedStream = new MediaStream(tracks);
 
@@ -245,10 +252,10 @@ async function toggleScreenShare() {
             const btn = document.getElementById('screenShareBtn');
             if(btn) { btn.innerText = "📺 共有停止"; btn.style.background = "#e74c3c"; }
 
-            // サーバーへ通知
+            // サーバーへ開始を通知
             socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: true });
 
-            // ★強制リダイヤル: 全員切断して、次のmanageConnectionsで新しいストリームでかけ直す
+            // ★全員と再接続
             reconnectEveryone();
 
         } catch (err) {
@@ -269,16 +276,17 @@ function stopScreenShare() {
     const btn = document.getElementById('screenShareBtn');
     if(btn) { btn.innerText = "📺 画面共有"; btn.style.background = "#3498db"; }
     
+    // サーバーへ終了を通知
     if(myRoomId) socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: false });
 
-    // ★強制リダイヤル (マイクのみに戻す)
+    // ★全員と再接続 (音声のみに戻す)
     reconnectEveryone();
 }
 
 function reconnectEveryone() {
     Object.values(activeCalls).forEach(call => call.close());
     activeCalls = {};
-    // 次の1秒タイマーで自動的に再接続される
+    // activeCallsを空にすることで、manageConnectionsが自動的に再発信を行う
 }
 
 function toggleScreenSize() {
@@ -324,7 +332,6 @@ function startYoutube() {
     
     socket.emit('changeYoutube', currentYoutubeState);
     document.getElementById('youtube-modal').style.display = 'none';
-    
     checkYoutubeStatus();
 }
 
@@ -372,7 +379,7 @@ function checkYoutubeStatus() {
 }
 
 // ============================
-// 5. 接続管理
+// 5. 接続管理 (Connection)
 // ============================
 function manageConnections() {
     if (!myPeer || !myStream || !myId) return;
@@ -398,18 +405,21 @@ function manageConnections() {
         }
 
         if (shouldConnect) {
-            // 未接続なら発信
+            // まだ通話オブジェクトがない場合、自分からかける
+            // (重複防止のため PeerID の大小比較で片方からのみ発信)
             if (!activeCalls[u.peerId]) {
                 if (myPeer.id > u.peerId) {
                     const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
+                    console.log("発信:", u.name);
                     const call = myPeer.call(u.peerId, streamToSend);
                     setupCallEvents(call);
                     activeCalls[u.peerId] = call;
                 }
             }
         } else {
-            // 切断
+            // 切断すべき相手
             if (activeCalls[u.peerId]) {
+                console.log("切断:", u.name);
                 activeCalls[u.peerId].close();
                 delete activeCalls[u.peerId];
                 removeMediaElements(u.peerId);
@@ -429,22 +439,30 @@ function manageConnections() {
 
 function setupCallEvents(call) {
     call.on('stream', remoteStream => {
-        // ★重要: 映像トラックがあれば「画面共有」として扱う
-        if (remoteStream.getVideoTracks().length > 0) {
+        const videoTracks = remoteStream.getVideoTracks();
+        
+        if (videoTracks.length > 0) {
+            // ★画面共有受信
+            // すでに表示されているなら更新しない (チラつき防止)
+            if(remoteScreenSharerId === call.peer) return;
+
+            // 他の共有を消す
+            closeScreenShareWindow();
+
             const container = document.getElementById('screen-share-container');
             const videoEl = document.getElementById('screen-share-video');
             
             if (videoEl) {
                 videoEl.srcObject = remoteStream;
                 container.style.display = 'block';
-                videoEl.play().catch(e => {}); // Mac対策
+                videoEl.play().catch(e => {}); 
                 remoteScreenSharerId = call.peer;
             }
         } else {
-            // 音声のみ
+            // ★音声のみ
             if (document.getElementById("audio-" + call.peer)) return;
             
-            // 以前の画面共有が残っていたら消す(交代時用)
+            // 画面共有からの切り替え処理 (映像がなくなったら消す)
             if(remoteScreenSharerId === call.peer) {
                 closeScreenShareWindow();
             }
@@ -495,14 +513,12 @@ function updateVolumes() {
             }
         }
 
-        // audioタグ
         const audioEl = document.getElementById("audio-" + u.peerId);
         if (audioEl) {
             if (volume <= 0.01) audioEl.muted = true;
             else { audioEl.muted = false; audioEl.volume = volume; }
         }
         
-        // 画面共有videoタグの音声
         if (remoteScreenSharerId === u.peerId) {
             const videoEl = document.getElementById('screen-share-video');
             if(videoEl) {
@@ -575,8 +591,7 @@ function moveMe(x, y) {
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
         lastMoveTime = now;
     }
-    checkAudioStatus(); 
-    checkYoutubeStatus();
+    checkAudioStatus(); checkYoutubeStatus();
 }
 
 function getCurrentZone() { if (ZONES.SILENT.check(myX, myY)) return ZONES.SILENT; return ZONES.LIVING; }
@@ -604,7 +619,7 @@ function setMicState(isOn) { if (myStream && myStream.getAudioTracks()[0]) myStr
 function exitOffice() { if(confirm("退出しますか？")) location.reload(); }
 
 // ============================
-// 7. モーダル制御
+// 7. モーダル・タイマー
 // ============================
 function showRoomModal(room) {
     const count = Object.values(users).filter(u => u.roomId === room.id).length;
@@ -783,13 +798,10 @@ async function applySettings() {
             if (myStream) myStream.getTracks().forEach(t => t.stop());
             myStream = newStream;
             setMicState(!isMicMutedByUser); 
-            
             reconnectEveryone();
-            
             alert("設定適用完了");
         } catch (e) { alert("失敗: " + e); }
     }
-    
     if (spkId) {
         currentSpeakerId = spkId;
         document.querySelectorAll('audio').forEach(a => {
@@ -800,9 +812,6 @@ async function applySettings() {
     closeSettings();
 }
 
-// ============================
-// 9. メイン描画ループ
-// ============================
 function loop() { draw(); requestAnimationFrame(loop); }
 
 function draw() {
@@ -816,7 +825,6 @@ function draw() {
     
     let camX = myX - visibleW / 2;
     let camY = myY - visibleH / 2;
-    
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
     camY = Math.max(0, Math.min(camY, WORLD_H - visibleH));
 
@@ -827,18 +835,15 @@ function draw() {
     if (bgImage.complete) {
         ctx.drawImage(bgImage, 0, 0, WORLD_W, WORLD_H);
     } else {
-        ctx.fillStyle = "#eee"; 
-        ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+        ctx.fillStyle = "#eee"; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     }
 
     MEETING_ROOMS.forEach(r => {
         ctx.fillStyle = "rgba(41, 128, 185, 0.2)"; 
         ctx.fillRect(r.x, r.y, r.w, r.h);
-        
         ctx.strokeStyle = "rgba(41, 128, 185, 0.9)"; 
         ctx.lineWidth = 4; 
         ctx.strokeRect(r.x, r.y, r.w, r.h);
-        
         ctx.fillStyle = "rgba(0, 0, 0, 0.7)"; 
         ctx.font = "bold 24px sans-serif"; 
         ctx.fillText(r.name, r.x + 30, r.y + 40);
@@ -846,11 +851,9 @@ function draw() {
 
     ctx.fillStyle = "rgba(231, 76, 60, 0.1)"; 
     ctx.fillRect(750, 0, 700, 450); 
-    
     ctx.strokeStyle = "rgba(192, 57, 43, 0.9)"; 
     ctx.lineWidth = 4; 
     ctx.strokeRect(750, 0, 700, 450);
-    
     ctx.fillStyle = "rgba(192, 57, 43, 1)"; 
     ctx.font = "bold 20px sans-serif"; 
     ctx.fillText("🚫 会話禁止 (Focus Zone)", 900, 60);
@@ -867,29 +870,14 @@ function draw() {
 
     Object.keys(users).forEach(id => {
         const u = users[id];
-        
-        ctx.shadowColor = "rgba(0,0,0,0.3)"; 
-        ctx.shadowBlur = 10;
-        
+        ctx.shadowColor = "rgba(0,0,0,0.3)"; ctx.shadowBlur = 10;
         ctx.fillStyle = (id === myId) ? '#e74c3c' : '#3498db';
-        ctx.beginPath(); 
-        ctx.arc(u.x, u.y, 20, 0, Math.PI * 2); 
-        ctx.fill();
-        
-        ctx.shadowBlur = 0; 
-        
-        ctx.fillStyle = "#fff"; 
-        ctx.strokeStyle = "#000"; 
-        ctx.lineWidth = 3;
-        ctx.font = "bold 14px sans-serif"; 
-        ctx.textAlign = "center";
-        
-        ctx.strokeText(u.name, u.x, u.y - 30);
-        ctx.fillText(u.name, u.x, u.y - 30);
-        
-        if (u.roomId) {
-            ctx.fillText("🔒", u.x, u.y - 45);
-        }
+        ctx.beginPath(); ctx.arc(u.x, u.y, 20, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 3;
+        ctx.font = "bold 14px sans-serif"; ctx.textAlign = "center";
+        ctx.strokeText(u.name, u.x, u.y - 30); ctx.fillText(u.name, u.x, u.y - 30);
+        if (u.roomId) ctx.fillText("🔒", u.x, u.y - 45);
     });
 
     ctx.restore();
@@ -898,15 +886,9 @@ function draw() {
 function getWorldPos(cx, cy) {
     const visibleW = canvas.width / cameraScale;
     const visibleH = canvas.height / cameraScale;
-    
     let camX = myX - visibleW / 2;
     let camY = myY - visibleH / 2;
-    
     camX = Math.max(0, Math.min(camX, WORLD_W - visibleW));
     camY = Math.max(0, Math.min(camY, WORLD_H - visibleH));
-    
-    return { 
-        x: (cx / cameraScale) + camX, 
-        y: (cy / cameraScale) + camY 
-    };
+    return { x: (cx / cameraScale) + camX, y: (cy / cameraScale) + camY };
 }
