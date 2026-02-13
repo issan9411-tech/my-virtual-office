@@ -2,14 +2,14 @@
 // グローバル変数 & 設定
 // ============================
 let socket = null, myPeer = null, myStream = null;
-let users = {}, activeCalls = {}; // PeerID: MediaConnection
+let users = {}, activeCalls = {}; 
 let myId = null;
 
-// 画面共有 (状態管理を厳密化)
+// 画面共有
 let myScreenStream = null;
 let isScreenSharing = false;
 let myCombinedStream = null;
-let remoteScreenSharerId = null; // 現在画面を見せている人のID (他人のみ)
+let remoteScreenSharerId = null;
 
 // YouTube
 let youtubePlayer = null;
@@ -189,10 +189,10 @@ function startSocketConnection() {
         }
     });
 
-    // ★画面共有の同期 (強力なリセット)
+    // 画面共有同期 (リセット制御の要)
     socket.on('screenShareSync', (data) => {
         if (data.roomId === myRoomId) {
-            // nullを受信したら、何が何でもリセットする
+            // nullが来たら強制リセット
             if (!data.sharerId) {
                 forceResetLocalScreenShareState();
             } 
@@ -208,7 +208,6 @@ function startSocketConnection() {
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
     
     myPeer.on('call', call => {
-        // 重複接続は閉じる
         if (activeCalls[call.peer]) {
             activeCalls[call.peer].close();
             delete activeCalls[call.peer];
@@ -248,7 +247,6 @@ async function toggleScreenShare() {
             const videoTrack = myScreenStream.getVideoTracks()[0];
             const micTrack = myStream.getAudioTracks()[0];
             
-            // ストリーム合成
             let tracks = [videoTrack, micTrack];
             if (withAudio && myScreenStream.getAudioTracks().length > 0) {
                 tracks.push(myScreenStream.getAudioTracks()[0]);
@@ -261,10 +259,9 @@ async function toggleScreenShare() {
             const btn = document.getElementById('screenShareBtn');
             if(btn) { btn.innerText = "📺 共有停止"; btn.style.background = "#e74c3c"; }
 
-            // サーバーへ通知 (共有開始)
+            // サーバーへ通知
             socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: true });
 
-            // 強制再接続
             reconnectEveryone();
 
         } catch (err) {
@@ -275,7 +272,6 @@ async function toggleScreenShare() {
 }
 
 function stopScreenShare() {
-    // 自分のストリームを停止
     if (myScreenStream) {
         myScreenStream.getTracks().forEach(t => t.stop());
         myScreenStream = null;
@@ -286,17 +282,15 @@ function stopScreenShare() {
     const btn = document.getElementById('screenShareBtn');
     if(btn) { btn.innerText = "📺 画面共有"; btn.style.background = "#3498db"; }
     
-    // ★重要: サーバーへ「停止」を通知 (これで全員がforceResetLocalScreenShareStateを実行する)
+    // ★停止通知
     if(myRoomId) socket.emit('updateScreenShare', { roomId: myRoomId, isSharing: false });
 
-    // 強制再接続 (マイクのみに戻す)
     reconnectEveryone();
 }
 
 function reconnectEveryone() {
     Object.values(activeCalls).forEach(call => call.close());
     activeCalls = {};
-    // 次のループで再接続される
 }
 
 function toggleScreenSize() {
@@ -308,22 +302,16 @@ function toggleScreenSize() {
     }
 }
 
-// ★強制リセット関数 (状態を「誰も共有していない」に戻す)
+// ★強制リセット関数 (DOM再生成でゾンビを消す)
 function forceResetLocalScreenShareState() {
-    const videoEl = document.getElementById('screen-share-video');
+    const wrapper = document.getElementById('video-wrapper');
     const container = document.getElementById('screen-share-container');
     
-    // 表示オフ
+    // 中身を空にする
+    if (wrapper) wrapper.innerHTML = '';
+    
     if (container) container.style.display = 'none';
     
-    // ビデオ停止・解放
-    if (videoEl) {
-        videoEl.pause();
-        videoEl.srcObject = null;
-        videoEl.load();
-    }
-    
-    // 変数リセット
     remoteScreenSharerId = null;
 }
 
@@ -423,19 +411,18 @@ function manageConnections() {
         }
 
         if (shouldConnect) {
-            // 未接続なら発信
             if (!activeCalls[u.peerId]) {
                 if (myPeer.id > u.peerId) {
-                    // 発信側: 画面共有中なら合成ストリームを使用
                     const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
+                    console.log("発信:", u.name);
                     const call = myPeer.call(u.peerId, streamToSend);
                     setupCallEvents(call);
                     activeCalls[u.peerId] = call;
                 }
             }
         } else {
-            // 切断
             if (activeCalls[u.peerId]) {
+                console.log("切断:", u.name);
                 activeCalls[u.peerId].close();
                 delete activeCalls[u.peerId];
                 removeMediaElements(u.peerId);
@@ -443,7 +430,6 @@ function manageConnections() {
         }
     });
 
-    // ユーザー削除時の掃除
     Object.keys(activeCalls).forEach(peerId => {
         const isUserExists = Object.values(users).some(u => u.peerId === peerId);
         if (!isUserExists) {
@@ -464,20 +450,40 @@ function setupCallEvents(call) {
                 forceResetLocalScreenShareState();
             }
 
+            const wrapper = document.getElementById('video-wrapper');
             const container = document.getElementById('screen-share-container');
-            const videoEl = document.getElementById('screen-share-video');
             
-            if (videoEl) {
+            if (wrapper) {
+                // DOMを一旦クリアしてから生成 (スマホ対策)
+                wrapper.innerHTML = ''; 
+                
+                const videoEl = document.createElement('video');
+                videoEl.id = 'screen-share-video';
+                videoEl.style.width = '100%';
+                videoEl.style.height = '100%';
+                videoEl.style.objectFit = 'contain';
+                videoEl.style.backgroundColor = 'black';
+                
+                // ★スマホ対応必須属性
+                videoEl.setAttribute('playsinline', '');
+                videoEl.setAttribute('autoplay', '');
+                // videoEl.muted = true; // 音声を聞くためにmuteしない
+
                 videoEl.srcObject = remoteStream;
-                container.style.display = 'block';
-                videoEl.play().catch(e => {}); 
+                wrapper.appendChild(videoEl);
+                
+                container.style.display = 'flex';
+                
+                // 再生試行
+                videoEl.play().catch(e => console.log("Play error:", e));
+                
                 remoteScreenSharerId = call.peer;
             }
         } else {
             // ★音声のみ
             if (document.getElementById("audio-" + call.peer)) return;
             
-            // この人が画面共有してたならリセット
+            // 画面共有からの切り替え処理
             if(remoteScreenSharerId === call.peer) {
                 forceResetLocalScreenShareState();
             }
@@ -506,7 +512,7 @@ function removeMediaElements(peerId) {
     const el = document.getElementById("audio-" + peerId);
     if (el) el.remove();
     
-    // 該当ユーザーが画面共有者だった場合、画面を消す
+    // 該当ユーザーが画面共有者だった場合
     if (remoteScreenSharerId === peerId) {
         forceResetLocalScreenShareState();
     }
