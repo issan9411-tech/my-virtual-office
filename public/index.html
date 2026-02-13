@@ -45,7 +45,7 @@
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
 
         input, select { padding: 10px; font-size: 16px; margin: 5px 0 15px 0; width: 100%; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
-        input[type="range"] { padding: 0; margin: 10px 0 20px 0; cursor: pointer; }
+        input[type="range"] { padding: 0; margin: 10px 0 20px 0; cursor: pointer; width: 100%; }
         label { display: block; text-align: left; margin-top: 5px; font-weight: bold; color: #555; font-size: 14px; }
         
         .btn { padding: 12px; font-size: 16px; cursor: pointer; border: none; border-radius: 6px; margin-top: 10px; font-weight: bold; width: 100%; color: white; transition: 0.2s; }
@@ -78,24 +78,41 @@
         #timer-display { font-size: 48px; font-weight: bold; color: #2c3e50; margin: 20px 0; }
         .timer-status { font-size: 18px; font-weight: bold; color: #e67e22; }
 
-        /* YouTubeプレイヤー (非表示・音声のみ) */
-        #youtube-container {
-            position: absolute; width: 1px; height: 1px; 
-            opacity: 0; pointer-events: none; 
-            overflow: hidden; top: 0; left: 0; z-index: -1;
-        }
+        /* YouTubeプレイヤー (音声のみ・非表示) */
+        #youtube-container { position: absolute; top: -1000px; left: -1000px; width: 1px; height: 1px; }
 
-        /* 画面共有コンテナ (会議室の上に表示) */
+        /* 画面共有コンテナ */
         #screen-share-container {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            width: 80%; height: 80%; z-index: 45; pointer-events: none;
-            display: none; justify-content: center; align-items: center;
+            position: absolute; 
+            z-index: 45; 
+            display: none; 
+            background: #000;
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            overflow: hidden;
         }
-        #screen-share-video {
-            max-width: 100%; max-height: 100%; 
-            border: 5px solid #3498db; border-radius: 8px; 
-            box-shadow: 0 0 50px rgba(0,0,0,0.8); background: #000;
+        /* 拡大モード */
+        #screen-share-container.large {
+            top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 80%; height: 80%;
         }
+        /* 縮小モード (デフォルト) */
+        #screen-share-container.small {
+            bottom: 90px; right: 20px;
+            width: 320px; height: 180px;
+            transform: none;
+        }
+        #screen-share-video { width: 100%; height: 100%; object-fit: contain; }
+        .ss-label {
+            position: absolute; top: 5px; left: 5px;
+            background: rgba(0,0,0,0.6); color: white;
+            padding: 2px 8px; font-size: 12px; border-radius: 4px;
+            pointer-events: none;
+        }
+        #ss-options { display: none; align-items: center; gap: 5px; margin-right: 10px; color: white; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -112,10 +129,16 @@
     <div id="youtube-modal" class="modal-overlay" style="display: none;">
         <div class="panel">
             <h3>🎵 YouTube (共有BGM)</h3>
-            <p style="font-size:13px; color:#666;">入力したURLの音声がフロア全員に共有されます。<br>(会議室や集中モードの人は除く)</p>
+            <p style="font-size:13px; color:#666;">入力したURLの音声がフロア全員に共有されます。</p>
             <label>YouTube URL</label>
             <input type="text" id="ytUrl" placeholder="https://www.youtube.com/watch?v=...">
-            <button class="btn btn-red" onclick="startYoutube()">▶️ 再生 / 共有</button>
+            
+            <label>YouTube音量</label>
+            <input type="range" id="ytVolume" min="0" max="100" value="50">
+            
+            <button id="ytRepeatBtn" class="btn btn-gray" onclick="toggleYoutubeRepeat()">🔁 リピートOFF</button>
+
+            <button class="btn btn-red" onclick="startYoutube()" style="margin-top:10px;">▶️ 再生 / 共有</button>
             <button class="btn btn-gray" onclick="stopYoutube()">⏹ 停止</button>
             <button onclick="document.getElementById('youtube-modal').style.display='none'" class="btn btn-gray" style="margin-top:20px;">閉じる</button>
         </div>
@@ -175,7 +198,8 @@
 
     <div id="room-status">会議室に入室中</div>
     
-    <div id="screen-share-container">
+    <div id="screen-share-container" class="small" onclick="toggleScreenSize()">
+        <div class="ss-label">画面共有 (タップで拡大/縮小)</div>
         <video id="screen-share-video" autoplay playsinline></video>
     </div>
 
@@ -194,11 +218,13 @@
         <button class="ctrl-btn zoom-btn" onclick="changeZoom(-0.1)">－</button>
         <button class="ctrl-btn zoom-btn" onclick="changeZoom(0.1)">＋</button>
         
+        <div id="ss-options">
+            <input type="checkbox" id="ssAudioCheck"> <label for="ssAudioCheck" style="margin:0; font-weight:normal; cursor:pointer;">PC音声も共有</label>
+        </div>
         <button id="screenShareBtn" class="ctrl-btn" style="background:#3498db; display:none;" onclick="toggleScreenShare()">📺 画面共有</button>
         
         <button class="ctrl-btn" style="background:#e67e22;" onclick="openTimer()">⏳ タイマー</button>
         <button id="micBtn" class="ctrl-btn" onclick="toggleMic()">マイクOFF</button>
-        
         <button id="ytBtn" class="ctrl-btn" onclick="document.getElementById('youtube-modal').style.display='flex'">▶️ Youtube</button>
 
         <button id="leaveRoomBtn" class="ctrl-btn" onclick="leaveMeetingRoom()" style="display:none; background:#e67e22;">退室</button>

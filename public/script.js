@@ -8,11 +8,12 @@ let myId = null;
 // 画面共有・メディア
 let myScreenStream = null;
 let isScreenSharing = false;
-let myCombinedStream = null; // マイク+画面合成用
+let myCombinedStream = null;
+let currentScreenSharerId = null;
 
 // YouTube
 let youtubePlayer = null;
-let currentYoutubeState = { videoId: null, isPlaying: false, timestamp: 0 };
+let currentYoutubeState = { videoId: null, isPlaying: false, timestamp: 0, isRepeat: false };
 
 // 基本設定
 let myX = 1400, myY = 900; 
@@ -22,33 +23,21 @@ let isMicMutedByUser = true;
 let audioContext = null; 
 let currentSpeakerId = "";
 
-// BGMノード (Web Audio API)
-let bgmSourceNode = null;
-let bgmGainNode = null;
+// BGMノード
+let bgmSourceNode = null, bgmGainNode = null;
 const bgmAudio = new Audio();
-bgmAudio.loop = true; 
-bgmAudio.crossOrigin = "anonymous";
+bgmAudio.loop = true; bgmAudio.crossOrigin = "anonymous";
 
-// タイマー
-let timerInterval = null;
-let timerTime = 15 * 60;
-let isFocusMode = true; 
-let isTimerRunning = false;
+let timerInterval = null, timerTime = 15 * 60, isFocusMode = true, isTimerRunning = false;
 
-// 表示設定
 let cameraScale = 1.0;
-const MIN_ZOOM = 0.4;
-const MAX_ZOOM = 2.0; 
-const bgImage = new Image(); 
-bgImage.src = "bg.jpg"; 
+const MIN_ZOOM = 0.4, MAX_ZOOM = 2.0; 
+const bgImage = new Image(); bgImage.src = "bg.jpg"; 
 
-const WORLD_W = 2000;
-const WORLD_H = 1125;
+const WORLD_W = 2000, WORLD_H = 1125;
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const TALK_DISTANCE = 120;
-const DISCONNECT_DISTANCE = 150; 
+const TALK_DISTANCE = 120, DISCONNECT_DISTANCE = 150; 
 
-// エリア設定
 const MEETING_ROOMS = [
     { id: 'A', name: '大会議室', type: 'rect', x: 40, y: 180, w: 680, h: 800, capacity: 10 },
     { id: 'B', name: 'ソファ席', type: 'rect', x: 820, y: 550, w: 420, h: 450, capacity: 6 }
@@ -69,28 +58,33 @@ window.addEventListener('load', () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     
-    // UI制御
     if (isMobile) {
-        const dPad = document.getElementById('d-pad');
-        if (dPad) dPad.style.display = 'block';
+        if(document.getElementById('d-pad')) document.getElementById('d-pad').style.display = 'block';
     } else {
-        // PCのみ画面共有ボタンを表示
         const ssBtn = document.getElementById('screenShareBtn');
-        if (ssBtn) ssBtn.style.display = 'block';
+        if(ssBtn) ssBtn.style.display = 'none';
     }
 
-    // BGM関連イベント
     const bgmSelect = document.getElementById('bgmSelect');
-    if (bgmSelect) bgmSelect.addEventListener('change', changeBgm);
+    if(bgmSelect) bgmSelect.addEventListener('change', changeBgm);
 
     const bgmVolume = document.getElementById('bgmVolume');
-    if (bgmVolume) {
+    if(bgmVolume) {
         bgmVolume.addEventListener('input', (e) => {
-            if (bgmGainNode) bgmGainNode.gain.value = parseFloat(e.target.value);
+            if(bgmGainNode) bgmGainNode.gain.value = parseFloat(e.target.value);
+        });
+    }
+    
+    // YouTube音量
+    const ytVolume = document.getElementById('ytVolume');
+    if(ytVolume) {
+        ytVolume.addEventListener('input', (e) => {
+            if(youtubePlayer && youtubePlayer.setVolume) {
+                youtubePlayer.setVolume(parseInt(e.target.value));
+            }
         });
     }
 
-    // オーディオ復帰処理 (タブ戻り時など)
     document.addEventListener('visibilitychange', () => { 
         if (document.visibilityState === 'visible') ensureAudioContext(); 
     });
@@ -98,47 +92,49 @@ window.addEventListener('load', () => {
     document.body.addEventListener('touchstart', ensureAudioContext, {once: false, passive: true});
 });
 
-// AudioContextの起動・再開
 function ensureAudioContext() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    
-    if (!audioContext) {
-        audioContext = new AC();
-    }
-    
-    if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(e => {});
-    }
+    if (!audioContext) audioContext = new AC();
+    if (audioContext.state === 'suspended') audioContext.resume().catch(e=>{});
 
-    // BGM用ノード接続 (まだ接続されていない場合のみ)
     if (!bgmSourceNode && audioContext) {
         try {
             bgmSourceNode = audioContext.createMediaElementSource(bgmAudio);
             bgmGainNode = audioContext.createGain();
-            
             const volInput = document.getElementById('bgmVolume');
-            if (volInput) bgmGainNode.gain.value = parseFloat(volInput.value);
-            
+            if(volInput) bgmGainNode.gain.value = parseFloat(volInput.value);
             bgmSourceNode.connect(bgmGainNode);
             bgmGainNode.connect(audioContext.destination);
         } catch(e) {}
     }
 }
 
-// YouTube API 準備完了時のコールバック
+// YouTube API
 function onYouTubeIframeAPIReady() {
     youtubePlayer = new YT.Player('player', {
-        height: '200', width: '200',
+        height: '1', width: '1',
         playerVars: { 'playsinline': 1, 'controls': 0, 'disablekb': 1 },
-        events: { 'onReady': onPlayerReady }
+        events: { 
+            'onReady': onPlayerReady,
+            'onStateChange': onPlayerStateChange
+        }
     });
 }
 function onPlayerReady() { checkYoutubeStatus(); }
 
-// ============================
-// 2. 入室処理
-// ============================
+// YouTube リピート制御
+function onPlayerStateChange(event) {
+    if (event.data === YT.PlayerState.ENDED) {
+        if (currentYoutubeState.isRepeat) {
+            // 再生終了 & リピートONなら再同期をかける
+            currentYoutubeState.timestamp = Date.now();
+            currentYoutubeState.isPlaying = true;
+            socket.emit('changeYoutube', currentYoutubeState);
+        }
+    }
+}
+
 async function startSetup() {
     ensureAudioContext();
     try {
@@ -148,13 +144,16 @@ async function startSetup() {
         document.getElementById('start-overlay').style.display = 'none';
         document.getElementById('entry-modal').style.display = 'flex';
         const micSelect = document.getElementById('micSelect');
-        if (micSelect) {
+        if(micSelect) {
             micSelect.addEventListener('change', () => startMicTest('micSelect', 'mic-visualizer-bar-entry'));
             startMicTest('micSelect', 'mic-visualizer-bar-entry');
         }
     } catch (err) { alert("マイクの使用を許可してください。"); }
 }
 
+// ============================
+// 2. 入室 & 通信開始
+// ============================
 document.getElementById('enterGameBtn').addEventListener('click', async () => {
     const nameInput = document.getElementById('username');
     if (!nameInput.value) { alert("名前を入力してください"); return; }
@@ -166,10 +165,7 @@ document.getElementById('enterGameBtn').addEventListener('click', async () => {
     currentSpeakerId = document.getElementById('speakerSelect').value;
 
     const constraints = { 
-        audio: { 
-            deviceId: micId ? { exact: micId } : undefined, 
-            echoCancellation: true, noiseSuppression: true, autoGainControl: true 
-        } 
+        audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
     };
 
     navigator.mediaDevices.getUserMedia(constraints)
@@ -191,7 +187,6 @@ function startSocketConnection() {
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
     
     myPeer.on('call', call => {
-        // 着信時：画面共有中なら合成ストリーム、そうでなければマイクのみ返す
         const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
         call.answer(streamToSend);
         setupCallEvents(call);
@@ -204,7 +199,7 @@ function startSocketConnection() {
 }
 
 // ============================
-// 3. 画面共有 (会議室限定・映像+音声)
+// 3. 画面共有
 // ============================
 async function toggleScreenShare() {
     if (!myRoomId) { alert("画面共有は会議室の中でのみ使用できます"); return; }
@@ -213,13 +208,21 @@ async function toggleScreenShare() {
         stopScreenShare();
     } else {
         try {
-            myScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+            const withAudio = document.getElementById('ssAudioCheck').checked;
+            
+            myScreenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                video: true, 
+                audio: withAudio 
+            });
             
             const videoTrack = myScreenStream.getVideoTracks()[0];
             const audioTrack = myStream.getAudioTracks()[0];
             
-            // 映像と音声を合成
-            myCombinedStream = new MediaStream([videoTrack, audioTrack]);
+            let tracks = [videoTrack, audioTrack];
+            if (withAudio && myScreenStream.getAudioTracks().length > 0) {
+                tracks.push(myScreenStream.getAudioTracks()[0]);
+            }
+            myCombinedStream = new MediaStream(tracks);
 
             videoTrack.onended = stopScreenShare;
 
@@ -256,8 +259,19 @@ function refreshAllConnections() {
     manageConnections();
 }
 
+function toggleScreenSize() {
+    const container = document.getElementById('screen-share-container');
+    if(container.classList.contains('small')) {
+        container.classList.remove('small');
+        container.classList.add('large');
+    } else {
+        container.classList.remove('large');
+        container.classList.add('small');
+    }
+}
+
 // ============================
-// 4. YouTube (音声のみ共有)
+// 4. YouTube
 // ============================
 function startYoutube() {
     const url = document.getElementById('ytUrl').value;
@@ -270,22 +284,44 @@ function startYoutube() {
 
     if(!videoId) { alert("正しいURLを入力してください"); return; }
     
-    currentYoutubeState = { videoId: videoId, isPlaying: true, timestamp: Date.now() };
+    currentYoutubeState.videoId = videoId;
+    currentYoutubeState.isPlaying = true;
+    currentYoutubeState.timestamp = Date.now();
+    
     socket.emit('changeYoutube', currentYoutubeState);
     document.getElementById('youtube-modal').style.display = 'none';
+    checkYoutubeStatus();
 }
 
 function stopYoutube() {
-    currentYoutubeState = { videoId: null, isPlaying: false, timestamp: 0 };
+    currentYoutubeState.isPlaying = false;
+    currentYoutubeState.timestamp = 0;
     socket.emit('changeYoutube', currentYoutubeState);
     document.getElementById('youtube-modal').style.display = 'none';
+    checkYoutubeStatus();
+}
+
+function toggleYoutubeRepeat() {
+    currentYoutubeState.isRepeat = !currentYoutubeState.isRepeat;
+    socket.emit('changeYoutube', currentYoutubeState);
 }
 
 function checkYoutubeStatus() {
+    // リピートボタンの見た目更新
+    const repeatBtn = document.getElementById('ytRepeatBtn');
+    if (repeatBtn) {
+        if (currentYoutubeState.isRepeat) {
+            repeatBtn.innerText = "🔁 リピートON";
+            repeatBtn.className = "btn btn-green";
+        } else {
+            repeatBtn.innerText = "🔁 リピートOFF";
+            repeatBtn.className = "btn btn-gray";
+        }
+    }
+
     if (!youtubePlayer || !youtubePlayer.loadVideoById) return;
 
     const myZone = getCurrentZone();
-    // 制限: 会議室にいる、Focus Zone、タイマー中 は聞こえない
     const isRestricted = myRoomId || (!myZone.allowMic && !myRoomId) || isTimerRunning;
 
     if (currentYoutubeState.isPlaying && !isRestricted) {
@@ -295,13 +331,18 @@ function checkYoutubeStatus() {
         } else if (pState !== 1 && pState !== 3) {
             youtubePlayer.playVideo();
         }
+        
+        // 音量適用
+        const volInput = document.getElementById('ytVolume');
+        if(volInput) youtubePlayer.setVolume(parseInt(volInput.value));
+        
     } else {
         youtubePlayer.pauseVideo();
     }
 }
 
 // ============================
-// 5. 接続管理 (Connection)
+// 5. 接続管理
 // ============================
 function manageConnections() {
     if (!myPeer || !myStream || !myId) return;
@@ -314,7 +355,7 @@ function manageConnections() {
 
         let shouldConnect = false;
         if (myRoomId) {
-            if (u.roomId === myRoomId) shouldConnect = true; // 会議室内は全員
+            if (u.roomId === myRoomId) shouldConnect = true; 
         } else {
             if (!u.roomId) {
                 const dist = Math.sqrt((myX - u.x)**2 + (myY - u.y)**2);
@@ -329,7 +370,6 @@ function manageConnections() {
         if (shouldConnect) {
             if (!activeCalls[u.peerId]) {
                 if (myPeer.id > u.peerId) {
-                    // 発信時：画面共有中なら合成ストリームを送る
                     const streamToSend = (isScreenSharing && myCombinedStream) ? myCombinedStream : myStream;
                     const call = myPeer.call(u.peerId, streamToSend);
                     setupCallEvents(call);
@@ -345,7 +385,6 @@ function manageConnections() {
         }
     });
 
-    // 退出したユーザーの掃除
     Object.keys(activeCalls).forEach(peerId => {
         const isUserExists = Object.values(users).some(u => u.peerId === peerId);
         if (!isUserExists) {
@@ -361,33 +400,39 @@ function setupCallEvents(call) {
         const videoTracks = remoteStream.getVideoTracks();
         
         if (videoTracks.length > 0) {
-            // 画面共有ストリームを受信
+            // 画面共有受信
             const container = document.getElementById('screen-share-container');
             const videoEl = document.getElementById('screen-share-video');
             
             if (videoEl) {
                 videoEl.srcObject = remoteStream;
-                container.style.display = 'flex';
-                // 画面共有の音声もここで再生される
+                container.style.display = 'block';
+                currentScreenSharerId = call.peer;
             }
         } else {
-            // 通常音声のみ
+            // 音声のみ
             if (document.getElementById("audio-" + call.peer)) return;
+            
+            // 画面共有からの切り替え処理
+            if(currentScreenSharerId === call.peer) {
+                document.getElementById('screen-share-container').style.display = 'none';
+                document.getElementById('screen-share-video').srcObject = null;
+                currentScreenSharerId = null;
+            }
+
             const audio = document.createElement('audio');
             audio.id = "audio-" + call.peer;
             audio.srcObject = remoteStream;
-            audio.autoplay = true; 
-            audio.playsInline = true;
-            if (currentSpeakerId && audio.setSinkId) audio.setSinkId(currentSpeakerId).catch(e=>{});
-            audio.volume = 0; 
-            audio.muted = true;
+            audio.autoplay = true; audio.playsInline = true;
+            if(currentSpeakerId && audio.setSinkId) audio.setSinkId(currentSpeakerId).catch(e=>{});
+            audio.volume = 0; audio.muted = true;
             document.body.appendChild(audio);
         }
     });
 
     const cleanup = () => { 
         removeMediaElements(call.peer); 
-        if (activeCalls[call.peer]) delete activeCalls[call.peer]; 
+        if(activeCalls[call.peer]) delete activeCalls[call.peer]; 
     };
     call.on('close', cleanup);
     call.on('error', cleanup);
@@ -397,12 +442,10 @@ function removeMediaElements(peerId) {
     const el = document.getElementById("audio-" + peerId);
     if (el) el.remove();
     
-    // 画面共有の停止判定
-    const videoEl = document.getElementById('screen-share-video');
-    const container = document.getElementById('screen-share-container');
-    if (videoEl && videoEl.srcObject && videoEl.srcObject.active === false) {
-        container.style.display = 'none';
-        videoEl.srcObject = null;
+    if (currentScreenSharerId === peerId) {
+        document.getElementById('screen-share-container').style.display = 'none';
+        document.getElementById('screen-share-video').srcObject = null;
+        currentScreenSharerId = null;
     }
 }
 
@@ -463,36 +506,24 @@ const setupBtn = (id, dx, dy) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     let interval = null; const speed = 20;
-    
     const startMove = (e) => {
-        if (e.cancelable) e.preventDefault();
-        if (myRoomId) return;
-        if (!interval) {
+        if(e.cancelable) e.preventDefault(); if(myRoomId) return;
+        if(!interval) {
             interval = setInterval(() => {
-                let nextX = myX + dx * speed;
-                let nextY = myY + dy * speed;
+                let nextX = myX + dx * speed; let nextY = myY + dy * speed;
                 nextX = Math.max(20, Math.min(nextX, WORLD_W-20));
                 nextY = Math.max(20, Math.min(nextY, WORLD_H-20));
-                myX = nextX; myY = nextY; 
-                moveMe(myX, myY); 
+                myX = nextX; myY = nextY; moveMe(myX, myY); 
             }, 50);
         }
     };
-    const stopMove = (e) => { 
-        if (e.cancelable) e.preventDefault(); 
-        clearInterval(interval); interval = null; 
-    };
-    
+    const stopMove = (e) => { if(e.cancelable) e.preventDefault(); clearInterval(interval); interval = null; };
     btn.addEventListener('touchstart', startMove, { passive: false });
     btn.addEventListener('touchend', stopMove, { passive: false });
     btn.addEventListener('mousedown', startMove);
     window.addEventListener('mouseup', stopMove);
 };
-
-setupBtn('d-up', 0, -1); 
-setupBtn('d-down', 0, 1); 
-setupBtn('d-left', -1, 0); 
-setupBtn('d-right', 1, 0);
+setupBtn('d-up', 0, -1); setupBtn('d-down', 0, 1); setupBtn('d-left', -1, 0); setupBtn('d-right', 1, 0);
 
 let lastMoveTime = 0;
 function moveMe(x, y) {
@@ -503,16 +534,10 @@ function moveMe(x, y) {
         socket.emit('move', { x: myX, y: myY, roomId: myRoomId });
         lastMoveTime = now;
     }
-    const myZone = getCurrentZone();
-    updateMicBtn(!myRoomId && !myZone.allowMic ? false : true, 
-                 !myRoomId && !myZone.allowMic ? "会話禁止エリア" : (isMicMutedByUser?"マイクOFF":"マイクON"));
-    checkYoutubeStatus();
+    checkAudioStatus(); checkYoutubeStatus();
 }
 
-function getCurrentZone() {
-    if (ZONES.SILENT.check(myX, myY)) return ZONES.SILENT;
-    return ZONES.LIVING;
-}
+function getCurrentZone() { if (ZONES.SILENT.check(myX, myY)) return ZONES.SILENT; return ZONES.LIVING; }
 
 function checkAudioStatus() {
     const currentZone = getCurrentZone();
@@ -545,11 +570,9 @@ function showRoomModal(room) {
     document.getElementById('room-title').innerText = room.name;
     document.getElementById('room-info').innerText = `定員: ${count}/${room.capacity}`;
     document.getElementById('room-modal').style.display = 'flex';
-    
     const joinBtn = document.getElementById('joinRoomBtn');
     const newBtn = joinBtn.cloneNode(true);
     joinBtn.parentNode.replaceChild(newBtn, joinBtn);
-
     newBtn.onclick = async () => {
         ensureAudioContext(); myRoomId = room.id;
         myX = room.x + room.w/2 - 50 + Math.random()*100;
@@ -561,7 +584,9 @@ function showRoomModal(room) {
         
         if (!isMobile) {
             const ssBtn = document.getElementById('screenShareBtn');
+            const ssOpt = document.getElementById('ss-options');
             if(ssBtn) ssBtn.style.display = 'block';
+            if(ssOpt) ssOpt.style.display = 'flex';
         }
 
         if(myStream) myStream.getAudioTracks().forEach(t => t.enabled = true);
@@ -577,8 +602,9 @@ function leaveMeetingRoom() {
     moveMe(1300, 900);
     document.getElementById('leaveRoomBtn').style.display = 'none';
     document.getElementById('room-status').style.display = 'none';
-    const ssBtn = document.getElementById('screenShareBtn');
-    if(ssBtn) ssBtn.style.display = 'none';
+    document.getElementById('screenShareBtn').style.display = 'none';
+    document.getElementById('ss-options').style.display = 'none';
+    document.getElementById('screen-share-container').style.display = 'none';
     
     checkAudioStatus(); manageConnections(); checkYoutubeStatus();
 }
@@ -621,7 +647,7 @@ function playCurrentBgm() {
 }
 
 // ============================
-// 8. 設定・デバイス・ユーティリティ
+// 8. ユーティリティ
 // ============================
 async function getDevices(mId, sId) {
     try {
