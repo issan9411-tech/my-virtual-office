@@ -34,15 +34,30 @@
         .mic-bar-bg { width: 100%; height: 10px; background: #eee; border-radius: 5px; margin-bottom: 15px; overflow: hidden; }
         .mic-bar-fill { width: 0%; height: 100%; background: #27ae60; transition: width 0.1s; }
 
+        /* ★コントロールバー修正: z-indexを上げてスクロール可能に */
         #controls-bar {
-            position: absolute; bottom: 0; left: 0; width: 100%; height: 70px;
-            background: rgba(30, 30, 30, 0.95); display: flex; justify-content: center; align-items: center;
-            gap: 10px; z-index: 50; border-top: 1px solid #555; padding: 0 10px; box-sizing: border-box;
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 80px;
+            background: rgba(30, 30, 30, 0.95); 
+            display: flex; align-items: center; justify-content: flex-start;
+            gap: 12px; 
+            z-index: 200; /* 最前面に */
+            border-top: 1px solid #555; padding: 0 15px; box-sizing: border-box;
+            overflow-x: auto; 
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            white-space: nowrap;
+            touch-action: pan-x; /* 横スクロールを許可 */
         }
-        .ctrl-btn { padding: 8px 15px; font-size: 14px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; color: white; white-space: nowrap; }
-        #micBtn { background: #e74c3c; width: 120px; }
+        #controls-bar::-webkit-scrollbar { display: none; }
+        @media (min-width: 800px) { #controls-bar { justify-content: center; } }
+
+        .ctrl-btn { 
+            padding: 8px 15px; font-size: 14px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; color: white; 
+            white-space: nowrap; flex-shrink: 0; 
+        }
+        #micBtn { background: #e74c3c; width: 120px; text-align: center; }
         #exitBtn { background: #7f8c8d; }
-        .zoom-btn { background: #34495e; font-size: 18px; width: 40px; }
+        .zoom-btn { background: #34495e; font-size: 18px; width: 40px; text-align: center; padding: 8px 0; }
         #ytBtn { background: #FF0000; color: white; display: none; }
 
         #room-status { position: absolute; top: 20px; left: 100px; padding: 10px 20px; background: #e67e22; color: white; font-weight: bold; border-radius: 30px; display: none; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
@@ -56,32 +71,17 @@
 
         #youtube-container { position: absolute; top: -1000px; left: -1000px; width: 1px; height: 1px; }
 
-        /* 画面共有コンテナ */
         #screen-share-container {
-            position: absolute; 
-            z-index: 60; /* d-padより上にする */
-            display: none; 
-            background: #000;
-            border: 2px solid #3498db;
-            border-radius: 8px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-            transition: all 0.3s ease;
-            cursor: pointer;
-            overflow: hidden;
+            position: absolute; z-index: 45; display: none; 
+            background: #000; border: 2px solid #3498db; border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5); transition: all 0.3s ease;
+            cursor: pointer; overflow: hidden;
         }
-        #screen-share-container.large {
-            top: 50%; left: 50%; transform: translate(-50%, -50%);
-            width: 90%; height: 70%; /* モバイル向けに少し調整 */
-        }
-        #screen-share-container.small {
-            bottom: 90px; right: 20px;
-            width: 320px; height: 180px;
-            transform: none;
-        }
+        #screen-share-container.large { top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; height: 80%; }
+        #screen-share-container.small { bottom: 90px; right: 20px; width: 320px; height: 180px; transform: none; }
         #screen-share-video { width: 100%; height: 100%; object-fit: contain; background: black; }
-        
         .ss-label { position: absolute; top: 5px; left: 5px; background: rgba(0,0,0,0.6); color: white; padding: 2px 8px; font-size: 12px; border-radius: 4px; pointer-events: none; }
-        #ss-options { display: none; align-items: center; gap: 5px; margin-right: 10px; color: white; font-size: 12px; }
+        #ss-options { display: none; align-items: center; gap: 5px; margin-right: 10px; color: white; font-size: 12px; flex-shrink: 0; }
     </style>
 </head>
 <body>

@@ -10,7 +10,7 @@ app.use(express.static(__dirname));
 
 let users = {};
 let roomYoutubeStates = {}; 
-let roomScreenShares = {}; 
+let roomScreenShares = {}; // key: roomId, value: socketId
 
 io.on("connection", (socket) => {
     // 初期化
@@ -47,7 +47,7 @@ io.on("connection", (socket) => {
                 socket.emit("screenShareSync", { roomId: newRoom, sharerId: sharerId });
             }
 
-            // 前の部屋で共有していたら強制解除
+            // 前の部屋で自分が共有していたら強制解除
             if (oldRoom && roomScreenShares[oldRoom] === socket.id) {
                 delete roomScreenShares[oldRoom];
                 io.emit("screenShareSync", { roomId: oldRoom, sharerId: null });
@@ -66,14 +66,15 @@ io.on("connection", (socket) => {
     socket.on("updateScreenShare", (data) => {
         if (data.roomId) {
             if (data.isSharing) {
-                // 新しく共有開始
+                // 上書き (新しい人が優先)
                 roomScreenShares[data.roomId] = socket.id;
             } else {
-                // 共有停止 (自分が共有者の場合のみ消す)
+                // 停止 (自分が共有者の場合のみ削除)
                 if (roomScreenShares[data.roomId] === socket.id) {
                     delete roomScreenShares[data.roomId];
                 }
             }
+            // 全員に「今誰が共有しているか(またはnull)」を送信
             io.emit("screenShareSync", { 
                 roomId: data.roomId, 
                 sharerId: roomScreenShares[data.roomId] || null 
