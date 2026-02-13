@@ -57,9 +57,6 @@ window.addEventListener('load', () => {
     
     if (isMobile) {
         if(document.getElementById('d-pad')) document.getElementById('d-pad').style.display = 'block';
-    } else {
-        const ssBtn = document.getElementById('screenShareBtn');
-        if(ssBtn) ssBtn.style.display = 'none';
     }
 
     const bgmSelect = document.getElementById('bgmSelect');
@@ -72,18 +69,15 @@ window.addEventListener('load', () => {
         });
     }
     
-    // ★YouTube音量スライダーの修正
-    // ループ内での設定をやめ、イベントリスナーのみで制御する
+    // ★YouTube音量スライダー (イベントリスナーで即時反映)
     const ytVolume = document.getElementById('ytVolume');
     if(ytVolume) {
-        const setYtVol = (e) => {
+        ytVolume.addEventListener('input', (e) => {
+            const vol = parseInt(e.target.value);
             if(youtubePlayer && youtubePlayer.setVolume && typeof youtubePlayer.setVolume === 'function') {
-                youtubePlayer.setVolume(parseInt(e.target.value));
+                youtubePlayer.setVolume(vol);
             }
-        };
-        // スマホ対応のため input(ドラッグ中) と change(離した時) 両方設定
-        ytVolume.addEventListener('input', setYtVol);
-        ytVolume.addEventListener('change', setYtVol);
+        });
     }
 
     document.addEventListener('visibilitychange', () => { 
@@ -129,7 +123,14 @@ window.onYouTubeIframeAPIReady = function() {
     });
 };
 
-function onPlayerReady() { checkYoutubeStatus(); }
+function onPlayerReady(event) {
+    // プレーヤー準備完了時に初期音量を設定
+    const volInput = document.getElementById('ytVolume');
+    if(volInput) {
+        event.target.setVolume(parseInt(volInput.value));
+    }
+    checkYoutubeStatus();
+}
 
 function onPlayerStateChange(event) {
     if (event.data === YT.PlayerState.ENDED) {
@@ -188,10 +189,6 @@ function startSocketConnection() {
         }
     });
 
-    socket.on('screenShareSync', (data) => {
-        // 画面共有機能は削除済みのため、受信しても何もしない（将来の拡張用）
-    });
-
     myPeer = new Peer();
     myPeer.on('open', peerId => socket.emit('enterRoom', { name: myName, peerId: peerId }));
     
@@ -233,9 +230,8 @@ function startYoutube() {
     
     socket.emit('changeYoutube', currentYoutubeState);
     
-    // UIは閉じない（音量調整のため）か、閉じるかはお好みで。
-    // ここでは「再生開始」したら閉じる挙動のままにします
-    document.getElementById('youtube-modal').style.display = 'none';
+    // スライダー操作のためモーダルは閉じない、もしくは操作後に閉じる
+    // document.getElementById('youtube-modal').style.display = 'none'; 
     
     checkYoutubeStatus();
 }
@@ -243,7 +239,7 @@ function startYoutube() {
 function stopYoutube() {
     currentYoutubeState.isPlaying = false;
     socket.emit('changeYoutube', currentYoutubeState);
-    document.getElementById('youtube-modal').style.display = 'none';
+    // document.getElementById('youtube-modal').style.display = 'none';
     checkYoutubeStatus();
 }
 
@@ -273,16 +269,12 @@ function checkYoutubeStatus() {
         const pState = youtubePlayer.getPlayerState();
         if (youtubePlayer.getVideoData().video_id !== currentYoutubeState.videoId) {
             youtubePlayer.loadVideoById(currentYoutubeState.videoId);
-            // 初期音量を適用
+            // 動画変更時も現在のスライダー値を適用
             const vol = document.getElementById('ytVolume').value;
             youtubePlayer.setVolume(parseInt(vol));
         } else if (pState !== 1 && pState !== 3) {
             youtubePlayer.playVideo();
         }
-        
-        // ★修正: ループ内で setVolume を呼び出さない (スマホ対策)
-        // 音量はイベントリスナーでのみ変更する
-        
     } else {
         youtubePlayer.pauseVideo();
     }
@@ -317,7 +309,6 @@ function manageConnections() {
         if (shouldConnect) {
             if (!activeCalls[u.peerId]) {
                 if (myPeer.id > u.peerId) {
-                    console.log("発信:", u.name);
                     const call = myPeer.call(u.peerId, myStream);
                     setupCallEvents(call);
                     activeCalls[u.peerId] = call;
@@ -325,7 +316,6 @@ function manageConnections() {
             }
         } else {
             if (activeCalls[u.peerId]) {
-                console.log("切断:", u.name);
                 activeCalls[u.peerId].close();
                 delete activeCalls[u.peerId];
                 removeAudio(u.peerId);
@@ -507,7 +497,6 @@ function showRoomModal(room) {
         document.getElementById('room-modal').style.display = 'none';
         document.getElementById('leaveRoomBtn').style.display = 'block';
         document.getElementById('room-status').style.display = 'block';
-        
         document.getElementById('ytBtn').style.display = 'flex';
 
         if(myStream) myStream.getAudioTracks().forEach(t => t.enabled = true);
@@ -522,9 +511,6 @@ function leaveMeetingRoom() {
     moveMe(1300, 900);
     document.getElementById('leaveRoomBtn').style.display = 'none';
     document.getElementById('room-status').style.display = 'none';
-    document.getElementById('screenShareBtn').style.display = 'none';
-    document.getElementById('ss-options').style.display = 'none';
-    
     document.getElementById('ytBtn').style.display = 'none';
     if(youtubePlayer && youtubePlayer.pauseVideo) youtubePlayer.pauseVideo();
 
