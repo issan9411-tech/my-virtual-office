@@ -78,7 +78,6 @@
         #timer-display { font-size: 48px; font-weight: bold; color: #2c3e50; margin: 20px 0; }
         .timer-status { font-size: 18px; font-weight: bold; color: #e67e22; }
 
-        /* YouTubeプレイヤー (音声のみ利用のため非表示) */
         #youtube-container { position: absolute; top: -1000px; left: -1000px; width: 1px; height: 1px; }
 
         /* 画面共有コンテナ */
@@ -103,7 +102,7 @@
             width: 320px; height: 180px;
             transform: none;
         }
-        #screen-share-video { width: 100%; height: 100%; object-fit: contain; }
+        #screen-share-video { width: 100%; height: 100%; object-fit: contain; background: black; }
         
         .ss-label {
             position: absolute; top: 5px; left: 5px;
@@ -132,12 +131,9 @@
             <p style="font-size:13px; color:#666;">入力したURLの音声が<b>この会議室の全員</b>に共有されます。</p>
             <label>YouTube URL</label>
             <input type="text" id="ytUrl" placeholder="https://www.youtube.com/watch?v=...">
-            
             <label>YouTube音量</label>
             <input type="range" id="ytVolume" min="0" max="100" value="50">
-            
             <button id="ytRepeatBtn" class="btn btn-gray" onclick="toggleYoutubeRepeat()">🔁 リピートOFF</button>
-
             <button class="btn btn-red" onclick="startYoutube()" style="margin-top:10px;">▶️ 再生 / 共有</button>
             <button class="btn btn-gray" onclick="stopYoutube()">⏹ 停止</button>
             <button onclick="document.getElementById('youtube-modal').style.display='none'" class="btn btn-gray" style="margin-top:20px;">閉じる</button>

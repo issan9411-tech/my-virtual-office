@@ -9,8 +9,8 @@ app.use(express.static("public"));
 app.use(express.static(__dirname));
 
 let users = {};
-let roomYoutubeStates = {}; // 部屋ごとのYouTube状態
-let roomScreenShares = {};  // 部屋ごとの画面共有者ID
+let roomYoutubeStates = {};
+let roomScreenShares = {}; // key: roomId, value: socketId
 
 io.on("connection", (socket) => {
     // 初期データ
@@ -37,18 +37,18 @@ io.on("connection", (socket) => {
             
             io.emit("updateUsers", users);
 
-            // 部屋移動時の同期処理
+            // 部屋移動時の同期
             if (newRoom && newRoom !== oldRoom) {
-                // YouTube同期
+                // YouTube
                 const ytState = roomYoutubeStates[newRoom] || { videoId: null, isPlaying: false, timestamp: 0, isRepeat: false };
                 socket.emit("youtubeSync", ytState);
 
-                // 画面共有同期 (誰が共有しているか)
+                // 画面共有 (誰が共有中か)
                 const sharerId = roomScreenShares[newRoom] || null;
                 socket.emit("screenShareSync", { roomId: newRoom, sharerId: sharerId });
             }
 
-            // 前の部屋で共有していたら停止
+            // 前の部屋で共有していたら強制停止
             if (oldRoom && roomScreenShares[oldRoom] === socket.id) {
                 delete roomScreenShares[oldRoom];
                 io.emit("screenShareSync", { roomId: oldRoom, sharerId: null });
@@ -56,7 +56,6 @@ io.on("connection", (socket) => {
         }
     });
 
-    // YouTube制御
     socket.on("changeYoutube", (data) => {
         if (data.roomId) {
             roomYoutubeStates[data.roomId] = data;
@@ -64,27 +63,29 @@ io.on("connection", (socket) => {
         }
     });
 
-    // 画面共有状態の更新
+    // ★画面共有の状態更新
     socket.on("updateScreenShare", (data) => {
         // data = { roomId, isSharing }
         if (data.roomId) {
             if (data.isSharing) {
+                // 上書き (早い者勝ちだが、実質ボタン制御で排他)
                 roomScreenShares[data.roomId] = socket.id;
             } else {
+                // 自分が共有していた場合のみ消す
                 if (roomScreenShares[data.roomId] === socket.id) {
                     delete roomScreenShares[data.roomId];
                 }
             }
+            // 全員に通知
             io.emit("screenShareSync", { 
                 roomId: data.roomId, 
-                sharerId: data.isSharing ? socket.id : null 
+                sharerId: roomScreenShares[data.roomId] || null 
             });
         }
     });
 
     socket.on("disconnect", () => {
         const userRoom = users[socket.id]?.roomId;
-        // 切断時に共有停止
         if (userRoom && roomScreenShares[userRoom] === socket.id) {
             delete roomScreenShares[userRoom];
             io.emit("screenShareSync", { roomId: userRoom, sharerId: null });
