@@ -565,7 +565,8 @@ function renderStackedBar(container, buckets, series, valueOf, fmtValue, hidden)
     return;
   }
   const visible = series.filter(s => !hidden.has(s.key));
-  const W = Math.max(560, container.clientWidth || 900);
+  // 実際のコンテナ幅で描画する(スマホで縮小されて文字が潰れるのを防ぐ)
+  const W = Math.max(340, container.clientWidth || 900);
   const H = 260;
   const pad = { top: 18, right: 12, bottom: 26, left: 52 };
   const plotW = W - pad.left - pad.right, plotH = H - pad.top - pad.bottom;

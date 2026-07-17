@@ -11,9 +11,16 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { exec } = require("node:child_process");
 
 const PORT = Number(process.env.PORT || 4545);
+// 既定はこの PC 内のみ。スマホなど LAN 内の他端末から見る場合は
+// HOST=0.0.0.0 で起動する(start-lan.bat を参照)。
+const HOST = process.env.HOST || "127.0.0.1";
+// LAN 公開時の簡易保護。DASH_TOKEN を設定すると
+// 初回アクセスに ?token=<値> が必要になる(以降は Cookie で通る)。
+const TOKEN = process.env.DASH_TOKEN || "";
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 // ccusage の呼び出しコマンド候補。グローバルインストール済みならそれを使い、
@@ -102,9 +109,26 @@ function sendJSON(res, status, obj) {
     res.end(body);
 }
 
+function isAuthorized(req, url) {
+    if (!TOKEN) return true;
+    if (url.searchParams.get("token") === TOKEN) return true;
+    const cookies = req.headers.cookie || "";
+    return cookies.split(";").some(c => c.trim() === `dashtoken=${TOKEN}`);
+}
+
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const refresh = url.searchParams.get("refresh") === "1";
+
+    if (!isAuthorized(req, url)) {
+        res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("アクセストークンが必要です。URL の末尾に ?token=<起動時に設定した値> を付けてアクセスしてください。");
+        return;
+    }
+    // トークン付きでアクセスできたら Cookie に保存して以降のリンクを楽にする
+    if (TOKEN && url.searchParams.get("token") === TOKEN) {
+        res.setHeader("Set-Cookie", `dashtoken=${TOKEN}; Path=/; Max-Age=2592000; SameSite=Strict`);
+    }
 
     if (url.pathname === "/api/usage" || url.pathname === "/api/blocks") {
         const handler = url.pathname === "/api/usage" ? API.usage : API.blocks;
@@ -136,10 +160,25 @@ const server = http.createServer(async (req, res) => {
     });
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+server.listen(PORT, HOST, () => {
+    const tokenSuffix = TOKEN ? `?token=${TOKEN}` : "";
     console.log("");
     console.log("  Claude Code トークンダッシュボード");
-    console.log(`  → http://localhost:${PORT}`);
+    console.log(`  → http://localhost:${PORT}${tokenSuffix}`);
+    if (HOST !== "127.0.0.1") {
+        // LAN 公開モード: スマホから開ける URL を列挙する
+        for (const addrs of Object.values(os.networkInterfaces())) {
+            for (const a of addrs || []) {
+                if (a.family === "IPv4" && !a.internal) {
+                    console.log(`  → http://${a.address}:${PORT}${tokenSuffix}  (同じ Wi-Fi のスマホから)`);
+                }
+            }
+        }
+        if (!TOKEN) {
+            console.log("");
+            console.log("  注意: LAN 内の誰でも閲覧できます。DASH_TOKEN の設定を推奨します。");
+        }
+    }
     console.log("");
     console.log("  初回はデータ集計(ccusage)に時間がかかることがあります。");
     console.log("  終了は Ctrl+C");
