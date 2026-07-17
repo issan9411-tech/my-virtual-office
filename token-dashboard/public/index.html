@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code トークンダッシュボード</title>
+<style>
+  :root {
+    color-scheme: light;
+    /* ---- サーフェス / インク ---- */
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    /* ---- カテゴリカル(検証済みパレット、固定順) ---- */
+    --series-1: #2a78d6;   /* blue */
+    --series-2: #008300;   /* green */
+    --series-3: #e87ba4;   /* magenta */
+    --series-4: #eda100;   /* yellow */
+    --series-other: #898781;
+    /* ---- メーター(同一ランプの薄いステップがトラック) ---- */
+    --meter-track: #cde2fb;
+    --meter-fill:  #2a78d6;
+    /* ---- ステータス(アイコン+ラベルと常に併用) ---- */
+    --status-good:     #0ca30c;
+    --status-warning:  #fab219;
+    --status-serious:  #ec835a;
+    --success-text:    #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #008300;
+      --series-3: #d55181;
+      --series-4: #c98500;
+      --meter-track: #184f95;
+      --meter-fill:  #3987e5;
+      --success-text: #0ca30c;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 20px 48px; }
+
+  header.top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  header.top h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  .updated { color: var(--text-muted); font-size: 12px; }
+  .spacer { flex: 1; }
+
+  button, select, input[type="number"] {
+    font: inherit; color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 12px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--axis); }
+  button.primary { font-weight: 600; }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 0 0 4px; }
+  .card .sub { font-size: 12px; color: var(--text-muted); }
+
+  /* ---- プラン判定カード ---- */
+  .plan-grid { display: grid; grid-template-columns: 1fr 320px; gap: 24px; }
+  @media (max-width: 800px) { .plan-grid { grid-template-columns: 1fr; } }
+  .hero { font-size: 48px; font-weight: 600; letter-spacing: -0.02em; margin: 2px 0 0; }
+  .hero small { font-size: 16px; font-weight: 400; color: var(--text-secondary); margin-left: 6px; }
+  .meter-wrap { margin: 14px 0 4px; }
+  .meter {
+    position: relative; height: 14px; border-radius: 7px;
+    background: var(--meter-track); overflow: visible;
+  }
+  .meter .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--meter-fill); border-radius: 7px 0 0 7px;
+    min-width: 2px;
+  }
+  .meter .proj {
+    position: absolute; top: 0; bottom: 0;
+    background: var(--meter-fill); opacity: .18;
+  }
+  .meter .mark {
+    position: absolute; top: -4px; bottom: -4px; width: 2px;
+    background: var(--text-secondary);
+  }
+  .meter-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+  .judgment { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 13px; color: var(--text-secondary); }
+  .judgment .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; }
+  .facts { list-style: none; padding: 0; margin: 10px 0 0; font-size: 13px; color: var(--text-secondary); }
+  .facts li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--grid); }
+  .facts li:last-child { border-bottom: 0; }
+  .facts b { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .plan-settings { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--text-muted); }
+  .plan-settings input[type="number"] { width: 90px; }
+
+  /* ---- KPI タイル ---- */
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .tile .label { font-size: 12px; color: var(--text-secondary); }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .meta  { font-size: 12px; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  /* ---- フィルタ行 ---- */
+  .filters { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 20px 0 12px; }
+  .seg { display: inline-flex; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 5px 14px; color: var(--text-secondary); }
+  .seg button.on { background: var(--series-1); color: #fff; font-weight: 600; }
+  .filters .flabel { font-size: 12px; color: var(--text-muted); }
+
+  /* ---- チャート ---- */
+  .chart-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-left: auto; }
+  .legend button {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 0; background: none; padding: 2px 0;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .legend button .sw { width: 10px; height: 10px; border-radius: 3px; }
+  .legend button.off { opacity: .38; text-decoration: line-through; }
+  figure.chart { margin: 8px 0 0; }
+  figure.chart svg { display: block; width: 100%; height: auto; }
+  .axis-text { font-size: 11px; fill: var(--text-muted); }
+  .bar-label { font-size: 11px; fill: var(--text-secondary); font-weight: 600; }
+  .loading { opacity: .5; transition: opacity .2s; }
+  .chart-note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .chart-note label { cursor: pointer; }
+
+  /* ---- ツールチップ ---- */
+  #tooltip {
+    position: fixed; z-index: 10; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12); min-width: 170px;
+  }
+  #tooltip .tt-title { color: var(--text-muted); margin-bottom: 4px; }
+  #tooltip .tt-row { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+  #tooltip .tt-key { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  #tooltip .tt-val { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  #tooltip .tt-name { color: var(--text-secondary); }
+  #tooltip .tt-total { border-top: 1px solid var(--grid); margin-top: 4px; padding-top: 4px; }
+
+  /* ---- テーブル ---- */
+  .tbl-wrap { overflow-x: auto; }
+  table.data { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.data th, table.data td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  table.data th { color: var(--text-secondary); font-weight: 600; }
+  table.data th:first-child, table.data td:first-child { text-align: left; }
+  table.data td { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  table.data td:first-child { color: var(--text-primary); }
+
+  .error-banner {
+    background: var(--surface-1); border: 1px solid var(--status-serious);
+    border-radius: 12px; padding: 14px 20px; margin-bottom: 16px;
+    display: none; font-size: 13px;
+  }
+  .error-banner b { color: var(--status-serious); }
+  .empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+  footer.note { color: var(--text-muted); font-size: 12px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>Claude Code トークンダッシュボード</h1>
+    <span class="updated" id="updated"></span>
+    <span class="spacer"></span>
+    <button class="primary" id="refreshBtn">↻ 再集計</button>
+  </header>
+
+  <div class="error-banner" id="errorBanner"></div>
+
+  <!-- プラン判定 -->
+  <section class="card">
+    <div class="plan-grid">
+      <div>
+        <h2>今月の API 換算コスト(月初〜今日)</h2>
+        <div class="hero" id="heroCost">–<small>USD</small></div>
+        <div class="meter-wrap">
+          <div class="meter" id="meter">
+            <div class="proj" id="meterProj"></div>
+            <div class="fill" id="meterFill"></div>
+            <div class="mark" id="meterMark"></div>
+          </div>
+          <div class="meter-labels">
+            <span>$0</span>
+            <span id="meterMarkLabel"></span>
+            <span id="meterMax"></span>
+          </div>
+        </div>
+        <div class="judgment" id="judgment"></div>
+        <div class="plan-settings">
+          <span>現在のプラン:</span>
+          <select id="planSelect">
+            <option value="pro">Pro($20/月)</option>
+            <option value="max5" selected>Max 5x($100/月)</option>
+            <option value="max20">Max 20x($200/月)</option>
+            <option value="custom">カスタム</option>
+          </select>
+          <span id="customPriceWrap" style="display:none">
+            $<input type="number" id="customPrice" min="1" step="1" value="100">/月
+          </span>
+        </div>
+      </div>
+      <div>
+        <h2>判断材料</h2>
+        <ul class="facts" id="facts"></ul>
+        <h2 style="margin-top:16px">現在の5時間ブロック <span class="sub">(Max のレート制限枠)</span></h2>
+        <ul class="facts" id="blockFacts"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- KPI -->
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <!-- フィルタ(以下のチャートとテーブルすべてに適用) -->
+  <div class="filters">
+    <span class="flabel">期間</span>
+    <div class="seg" id="rangeSeg">
+      <button data-days="7">7日</button>
+      <button data-days="30" class="on">30日</button>
+      <button data-days="90">90日</button>
+      <button data-days="365">1年</button>
+      <button data-days="0">全期間</button>
+    </div>
+    <span class="flabel">粒度</span>
+    <div class="seg" id="granSeg">
+      <button data-g="day" class="on">日次</button>
+      <button data-g="week">週次</button>
+      <button data-g="month">月次</button>
+    </div>
+  </div>
+
+  <!-- コストチャート -->
+  <section class="card">
+    <div class="chart-head">
+      <div>
+        <h2>API 換算コストの推移(モデル別)</h2>
+        <span class="sub">従量課金(API)で同じ使い方をした場合の金額</span>
+      </div>
+      <div class="legend" id="costLegend"></div>
+    </div>
+    <figure class="chart" id="costChart"></figure>
+  </section>
+
+  <!-- トークンチャート -->
+  <section class="card">
+    <div class="chart-head">
+      <div>
+        <h2>トークン消費の推移(種別)</h2>
+        <span class="sub">キャッシュ読み取りが大半を占めるのが正常です</span>
+      </div>
+      <div class="legend" id="tokLegend"></div>
+    </div>
+    <figure class="chart" id="tokChart"></figure>
+    <div class="chart-note">
+      <label><input type="checkbox" id="hideCacheRead"> キャッシュ読み取りを除いて表示(入出力の内訳を見たいとき)</label>
+    </div>
+  </section>
+
+  <!-- テーブル -->
+  <section class="card">
+    <h2>データテーブル(現在のフィルタ適用)</h2>
+    <div class="tbl-wrap">
+      <table class="data" id="dataTable"></table>
+    </div>
+  </section>
+
+  <footer class="note">
+    データソース: <code>~/.claude/projects/</code> の Claude Code ローカルログ(ccusage で集計)。
+    claude.ai の Web チャット利用はログが残らないため含まれません。
+    コストはモデル別 API 単価による換算値で、サブスクリプションの実支払額ではありません。
+    5分ごとに自動更新します。
+  </footer>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+/* ================= 状態 ================= */
+const PLANS = { pro: 20, max5: 100, max20: 200 };
+const state = {
+  daily: [],            // ccusage daily(昇順)
+  blocks: [],
+  rangeDays: 30,        // 0 = 全期間
+  granularity: "day",
+  plan: "max5",
+  customPrice: 100,
+  hideCacheRead: false,
+  hiddenCost: new Set(),   // 凡例トグルで非表示のモデル
+  hiddenTok: new Set(),    // 凡例トグルで非表示のトークン種別
+};
+
+// localStorage からプラン設定を復元
+try {
+  const saved = JSON.parse(localStorage.getItem("tokendash.plan") || "{}");
+  if (saved.plan in PLANS || saved.plan === "custom") state.plan = saved.plan;
+  if (Number(saved.customPrice) > 0) state.customPrice = Number(saved.customPrice);
+} catch (e) { /* 破損時はデフォルト */ }
+
+function planPrice() {
+  return state.plan === "custom" ? state.customPrice : PLANS[state.plan];
+}
+
+/* ================= 整形 ================= */
+const fmtUSD  = v => "$" + (v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2));
+const fmtTok = v => {
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + "K";
+  return String(Math.round(v));
+};
+const fmtTokFull = v => Math.round(v).toLocaleString("en-US");
+const pad2 = n => String(n).padStart(2, "0");
+const localISO = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function seriesColors() {
+  return [cssVar("--series-1"), cssVar("--series-2"), cssVar("--series-3"), cssVar("--series-4")];
+}
+
+/* ================= 集計 ================= */
+// 週の開始(月曜)を返す
+function weekStart(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const day = (d.getDay() + 6) % 7; // 月=0
+  d.setDate(d.getDate() - day);
+  return d;
+}
+function bucketKey(dateStr, g) {
+  if (g === "day") return dateStr;
+  if (g === "week") return localISO(weekStart(dateStr));
+  return dateStr.slice(0, 7); // YYYY-MM
+}
+function bucketLabel(key, g) {
+  if (g === "day") { const [, m, d] = key.split("-"); return `${Number(m)}/${Number(d)}`; }
+  if (g === "week") { const [, m, d] = key.split("-"); return `${Number(m)}/${Number(d)}週`; }
+  const [y, m] = key.split("-"); return `${y}年${Number(m)}月`;
+}
+function bucketLabelFull(key, g) {
+  if (g === "day") return key;
+  if (g === "week") return `${key} 週(月曜起点)`;
+  return key;
+}
+
+// フィルタ済み日次データ → 粒度別バケット
+function aggregate(daily, g) {
+  const map = new Map();
+  for (const d of daily) {
+    const key = bucketKey(d.period, g);
+    let b = map.get(key);
+    if (!b) {
+      b = { key, label: bucketLabel(key, g), labelFull: bucketLabelFull(key, g),
+            input: 0, output: 0, cacheCreate: 0, cacheRead: 0, cost: 0, models: new Map() };
+      map.set(key, b);
+    }
+    b.input += d.inputTokens; b.output += d.outputTokens;
+    b.cacheCreate += d.cacheCreationTokens; b.cacheRead += d.cacheReadTokens;
+    b.cost += d.totalCost;
+    for (const m of d.modelBreakdowns || []) {
+      b.models.set(m.modelName, (b.models.get(m.modelName) || 0) + m.cost);
+    }
+  }
+  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function filteredDaily() {
+  if (!state.rangeDays) return state.daily;
+  const from = new Date(); from.setDate(from.getDate() - (state.rangeDays - 1));
+  const fromKey = localISO(from);
+  return state.daily.filter(d => d.period >= fromKey);
+}
+
+// モデル → 色スロットの固定割り当て(全期間の合計コスト降順、5位以下は「その他」)
+function modelRegistry() {
+  const totals = new Map();
+  for (const d of state.daily) {
+    for (const m of d.modelBreakdowns || []) {
+      totals.set(m.modelName, (totals.get(m.modelName) || 0) + m.cost);
+    }
+  }
+  const ordered = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
+  return { top: ordered.slice(0, 4), hasOther: ordered.length > 4 };
+}
+
+function sumRange(fromKey, toKey) {
+  const acc = { cost: 0, tokens: 0, output: 0 };
+  for (const d of state.daily) {
+    if (d.period >= fromKey && d.period <= toKey) {
+      acc.cost += d.totalCost; acc.tokens += d.totalTokens; acc.output += d.outputTokens;
+    }
+  }
+  return acc;
+}
+
+/* ================= プラン判定 ================= */
+function renderPlanCard() {
+  const now = new Date();
+  const monthStart = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`;
+  const today = localISO(now);
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const dayOfMonth = now.getDate();
+
+  const mtd = sumRange(monthStart, today);
+  const projection = dayOfMonth > 0 ? (mtd.cost / dayOfMonth) * daysInMonth : 0;
+  const price = planPrice();
+
+  document.getElementById("heroCost").innerHTML = "";
+  document.getElementById("heroCost").append(fmtUSD(mtd.cost));
+  const sm = document.createElement("small"); sm.textContent = "USD";
+  document.getElementById("heroCost").append(sm);
+
+  // メーター: 実績(塗り) + 月末予測(薄い延長) + プラン料金(マーカー)
+  const scaleMax = Math.max(projection, price) * 1.15 || 1;
+  const pct = v => Math.min(100, (v / scaleMax) * 100);
+  document.getElementById("meterFill").style.width = pct(mtd.cost) + "%";
+  const projEl = document.getElementById("meterProj");
+  projEl.style.left = pct(mtd.cost) + "%";
+  projEl.style.width = Math.max(0, pct(projection) - pct(mtd.cost)) + "%";
+  document.getElementById("meterMark").style.left = pct(price) + "%";
+  document.getElementById("meterMarkLabel").textContent = `▲ プラン料金 ${fmtUSD(price)}`;
+  document.getElementById("meterMax").textContent = fmtUSD(scaleMax);
+
+  // 判定(あくまで目安。レート制限の体感と併せて判断してもらう)
+  const ratio = price > 0 ? projection / price : 0;
+  let color, text;
+  if (projection < PLANS.pro * 0.9) {
+    color = cssVar("--status-warning");
+    text = `月末予測 ${fmtUSD(projection)} は Pro($20)を下回る水準です。この使用量が続くならダウングレードを検討できます(判定: 参考値)。`;
+  } else if (ratio < 1) {
+    color = cssVar("--status-warning");
+    text = `月末予測 ${fmtUSD(projection)} はプラン料金を下回るペースです(${ratio.toFixed(1)}倍)。使用量ベースでは元が取れていませんが、レート制限に余裕を持ちたい場合は現状維持も合理的です。`;
+  } else if (ratio < 3 || state.plan === "max20") {
+    color = cssVar("--status-good");
+    text = `月末予測 ${fmtUSD(projection)} はプラン料金の ${ratio.toFixed(1)}倍。現在のプランで十分に元が取れています。`;
+  } else {
+    color = cssVar("--status-serious");
+    text = `月末予測 ${fmtUSD(projection)} はプラン料金の ${ratio.toFixed(1)}倍。5時間ブロックや週次のレート制限に頻繁に当たっているなら、上位プランを検討する目安です。`;
+  }
+  const j = document.getElementById("judgment");
+  j.innerHTML = "";
+  const dot = document.createElement("span"); dot.className = "dot"; dot.style.background = color;
+  const span = document.createElement("span"); span.textContent = text;
+  j.append(dot, span);
+
+  // 判断材料リスト
+  const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+  const prevMonthStart = `${prevMonthEnd.getFullYear()}-${pad2(prevMonthEnd.getMonth() + 1)}-01`;
+  const prev = sumRange(prevMonthStart, localISO(prevMonthEnd));
+  const facts = [
+    ["月末予測(経過日数で線形換算)", fmtUSD(projection)],
+    ["プラン料金との比", price > 0 ? ratio.toFixed(2) + "倍" : "–"],
+    ["先月の API 換算コスト", fmtUSD(prev.cost)],
+    ["今月の合計トークン", fmtTok(mtd.tokens)],
+  ];
+  const ul = document.getElementById("facts");
+  ul.innerHTML = "";
+  for (const [k, v] of facts) {
+    const li = document.createElement("li");
+    const s = document.createElement("span"); s.textContent = k;
+    const b = document.createElement("b"); b.textContent = v;
+    li.append(s, b); ul.append(li);
+  }
+}
+
+function renderBlockCard() {
+  const ul = document.getElementById("blockFacts");
+  ul.innerHTML = "";
+  const active = (state.blocks || []).find(b => b.isActive && !b.isGap);
+  const rows = [];
+  if (!active) {
+    rows.push(["状態", "アクティブなブロックなし"]);
+  } else {
+    const remainMin = active.projection ? active.projection.remainingMinutes
+      : Math.max(0, Math.round((new Date(active.endTime) - Date.now()) / 60000));
+    rows.push(
+      ["ブロック内コスト", fmtUSD(active.costUSD || 0)],
+      ["ブロック内トークン", fmtTok(active.totalTokens || 0)],
+      ["燃焼率", active.burnRate ? fmtTok(active.burnRate.tokensPerMinute) + " tok/分" : "–"],
+      ["リセットまで", `${Math.floor(remainMin / 60)}時間${remainMin % 60}分`],
+    );
+  }
+  for (const [k, v] of rows) {
+    const li = document.createElement("li");
+    const s = document.createElement("span"); s.textContent = k;
+    const b = document.createElement("b"); b.textContent = v;
+    li.append(s, b); ul.append(li);
+  }
+}
+
+/* ================= KPI ================= */
+function renderKPIs() {
+  const now = new Date();
+  const today = localISO(now);
+  const ws = weekStart(today);
+  const prevWs = new Date(ws); prevWs.setDate(prevWs.getDate() - 7);
+  const prevWe = new Date(ws); prevWe.setDate(prevWe.getDate() - 1);
+  const monthStart = today.slice(0, 8) + "01";
+  const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+
+  const defs = [
+    { label: "今日", cur: sumRange(today, today), prev: sumRange(localISO(yest), localISO(yest)), vs: "昨日" },
+    { label: "今週(月曜起点)", cur: sumRange(localISO(ws), today), prev: sumRange(localISO(prevWs), localISO(prevWe)), vs: "先週" },
+    { label: "今月", cur: sumRange(monthStart, today), prev: null, vs: "" },
+    { label: "全期間", cur: sumRange("0000-00-00", "9999-99-99"), prev: null, vs: "" },
+  ];
+  const row = document.getElementById("kpiRow");
+  row.innerHTML = "";
+  for (const d of defs) {
+    const tile = document.createElement("div"); tile.className = "tile";
+    const l = document.createElement("div"); l.className = "label"; l.textContent = d.label;
+    const v = document.createElement("div"); v.className = "value"; v.textContent = fmtUSD(d.cur.cost);
+    const m = document.createElement("div"); m.className = "meta";
+    let meta = fmtTok(d.cur.tokens) + " tokens";
+    if (d.prev && d.prev.cost > 0) {
+      const diff = ((d.cur.cost - d.prev.cost) / d.prev.cost) * 100;
+      meta += ` ・ ${d.vs}比 ${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%`;
+    }
+    m.textContent = meta;
+    tile.append(l, v, m); row.append(tile);
+  }
+}
+
+/* ================= 積み上げ棒チャート(SVG) ================= */
+// series: [{key, name, color}] / buckets: values[key] を持つこと
+function renderStackedBar(container, buckets, series, valueOf, fmtValue, hidden) {
+  container.innerHTML = "";
+  if (!buckets.length) {
+    const p = document.createElement("div"); p.className = "empty";
+    p.textContent = "この期間のデータがありません";
+    container.append(p);
+    return;
+  }
+  const visible = series.filter(s => !hidden.has(s.key));
+  const W = Math.max(560, container.clientWidth || 900);
+  const H = 260;
+  const pad = { top: 18, right: 12, bottom: 26, left: 52 };
+  const plotW = W - pad.left - pad.right, plotH = H - pad.top - pad.bottom;
+
+  const totals = buckets.map(b => visible.reduce((a, s) => a + valueOf(b, s.key), 0));
+  const maxV = Math.max(...totals, 1e-9);
+  // きれいな目盛り上限
+  const rawStep = maxV / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s * 4 >= maxV) || 10 * mag;
+  const yMax = step * 4;
+  const y = v => pad.top + plotH - (v / yMax) * plotH;
+
+  const slot = plotW / buckets.length;
+  const barW = Math.min(24, Math.max(3, slot * 0.6));
+  const GAP = 2; // セグメント間はサーフェス色の 2px ギャップ
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+
+  // グリッド + y軸ラベル(ヘアライン・実線)
+  for (let i = 0; i <= 4; i++) {
+    const v = step * i, yy = y(v);
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("x1", pad.left); line.setAttribute("x2", W - pad.right);
+    line.setAttribute("y1", yy); line.setAttribute("y2", yy);
+    line.setAttribute("stroke", i === 0 ? cssVar("--axis") : cssVar("--grid"));
+    line.setAttribute("stroke-width", "1");
+    svg.append(line);
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", pad.left - 8); t.setAttribute("y", yy + 4);
+    t.setAttribute("text-anchor", "end");
+    t.setAttribute("class", "axis-text");
+    t.style.fontVariantNumeric = "tabular-nums";
+    t.textContent = fmtValue(v, true);
+    svg.append(t);
+  }
+
+  // x軸ラベル(混雑回避のため間引く)
+  const every = Math.ceil(buckets.length / Math.floor(plotW / 64));
+  buckets.forEach((b, i) => {
+    if (i % every !== 0 && i !== buckets.length - 1) return;
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", pad.left + slot * i + slot / 2);
+    t.setAttribute("y", H - 8);
+    t.setAttribute("text-anchor", "middle");
+    t.setAttribute("class", "axis-text");
+    t.textContent = b.label;
+    svg.append(t);
+  });
+
+  // 上端だけ 4px 角丸のパス(基線側は直角)
+  function topRoundedRect(x, yTop, w, h, r) {
+    r = Math.min(r, w / 2, h);
+    return `M${x},${yTop + h} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + w - r} Q${x + w},${yTop} ${x + w},${yTop + r} V${yTop + h} Z`;
+  }
+
+  const cols = [];
+  buckets.forEach((b, i) => {
+    const cx = pad.left + slot * i + (slot - barW) / 2;
+    const g = document.createElementNS(NS, "g");
+    let acc = 0;
+    const segs = visible.map(s => ({ s, v: valueOf(b, s.key) })).filter(e => e.v > 0);
+    segs.forEach((e, si) => {
+      const y0 = y(acc), y1 = y(acc + e.v);
+      let top = y1, bottom = y0;
+      if (si > 0) bottom -= GAP; // 下のセグメントとの間にサーフェスギャップ
+      const h = Math.max(0.5, bottom - top);
+      const isTopmost = si === segs.length - 1;
+      let el;
+      if (isTopmost && h >= 2) {
+        el = document.createElementNS(NS, "path");
+        el.setAttribute("d", topRoundedRect(cx, top, barW, h, 4));
+      } else {
+        el = document.createElementNS(NS, "rect");
+        el.setAttribute("x", cx); el.setAttribute("y", top);
+        el.setAttribute("width", barW); el.setAttribute("height", h);
+      }
+      el.setAttribute("fill", e.s.color);
+      g.append(el);
+      acc += e.v;
+    });
+    svg.append(g);
+    cols.push({ g, b, total: totals[i], cx: pad.left + slot * i, segs });
+  });
+
+  // 直接ラベルは選択的に: 最後のバケットの合計のみ(残りは軸とツールチップに任せる)
+  const last = cols[cols.length - 1];
+  if (last && last.total > 0) {
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", last.cx + slot / 2);
+    t.setAttribute("y", y(last.total) - 6);
+    t.setAttribute("text-anchor", "middle");
+    t.setAttribute("class", "bar-label");
+    t.textContent = fmtValue(last.total, true);
+    svg.append(t);
+  }
+
+  // ホバー層: 列全体を当たり判定にする透明レクト + ツールチップ
+  const tooltip = document.getElementById("tooltip");
+  cols.forEach(c => {
+    const hit = document.createElementNS(NS, "rect");
+    hit.setAttribute("x", c.cx); hit.setAttribute("y", pad.top);
+    hit.setAttribute("width", slot); hit.setAttribute("height", plotH);
+    hit.setAttribute("fill", "transparent");
+    hit.setAttribute("tabindex", "0");
+    const show = (px, py) => {
+      c.g.style.opacity = ".8";
+      tooltip.innerHTML = "";
+      const title = document.createElement("div"); title.className = "tt-title";
+      title.textContent = c.b.labelFull;
+      tooltip.append(title);
+      for (let i = c.segs.length - 1; i >= 0; i--) {
+        const e = c.segs[i];
+        const row = document.createElement("div"); row.className = "tt-row";
+        const key = document.createElement("span"); key.className = "tt-key"; key.style.background = e.s.color;
+        const val = document.createElement("span"); val.className = "tt-val"; val.textContent = fmtValue(e.v, false);
+        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = e.s.name;
+        row.append(key, val, name); tooltip.append(row);
+      }
+      const tot = document.createElement("div"); tot.className = "tt-row tt-total";
+      const sp = document.createElement("span"); sp.className = "tt-key"; sp.style.background = "transparent";
+      const val = document.createElement("span"); val.className = "tt-val"; val.textContent = fmtValue(c.total, false);
+      const name = document.createElement("span"); name.className = "tt-name"; name.textContent = "合計";
+      tot.append(sp, val, name); tooltip.append(tot);
+      tooltip.style.display = "block";
+      const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+      let x = px + 14, yv = py - th - 10;
+      if (x + tw > innerWidth - 8) x = px - tw - 14;
+      if (yv < 8) yv = py + 14;
+      tooltip.style.left = x + "px"; tooltip.style.top = yv + "px";
+    };
+    const hide = () => { c.g.style.opacity = ""; tooltip.style.display = "none"; };
+    hit.addEventListener("pointermove", ev => show(ev.clientX, ev.clientY));
+    hit.addEventListener("pointerleave", hide);
+    hit.addEventListener("focus", () => {
+      const r = hit.getBoundingClientRect();
+      show(r.left + r.width / 2, r.top + 20);
+    });
+    hit.addEventListener("blur", hide);
+    svg.append(hit);
+  });
+
+  container.append(svg);
+}
+
+function renderLegend(el, series, hidden, onToggle) {
+  el.innerHTML = "";
+  if (series.length < 2) return; // 単一系列はタイトルが系列名を兼ねるため凡例を出さない
+  for (const s of series) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    if (hidden.has(s.key)) btn.className = "off";
+    const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = s.color;
+    const name = document.createElement("span"); name.textContent = s.name;
+    btn.append(sw, name);
+    btn.addEventListener("click", () => onToggle(s.key));
+    el.append(btn);
+  }
+}
+
+/* ================= チャート組み立て ================= */
+function tokenSeries() {
+  const c = seriesColors();
+  const all = [
+    { key: "input",       name: "入力",           color: c[0] },
+    { key: "output",      name: "出力",           color: c[1] },
+    { key: "cacheCreate", name: "キャッシュ作成", color: c[2] },
+    { key: "cacheRead",   name: "キャッシュ読取", color: c[3] },
+  ];
+  return state.hideCacheRead ? all.filter(s => s.key !== "cacheRead") : all;
+}
+
+function costSeries() {
+  const reg = modelRegistry();
+  const c = seriesColors();
+  const series = reg.top.map((name, i) => ({ key: name, name, color: c[i] }));
+  if (reg.hasOther) series.push({ key: "__other__", name: "その他", color: cssVar("--series-other") });
+  return series;
+}
+
+function renderCharts() {
+  const buckets = aggregate(filteredDaily(), state.granularity);
+
+  const cSeries = costSeries();
+  const topSet = new Set(cSeries.map(s => s.key));
+  const costOf = (b, key) => {
+    if (key === "__other__") {
+      let sum = 0;
+      for (const [name, v] of b.models) if (!topSet.has(name)) sum += v;
+      return sum;
+    }
+    return b.models.get(key) || 0;
+  };
+  renderStackedBar(
+    document.getElementById("costChart"), buckets, cSeries, costOf,
+    (v, compact) => fmtUSD(v), state.hiddenCost
+  );
+  renderLegend(document.getElementById("costLegend"), cSeries, state.hiddenCost, key => {
+    state.hiddenCost.has(key) ? state.hiddenCost.delete(key) : state.hiddenCost.add(key);
+    renderCharts();
+  });
+
+  const tSeries = tokenSeries();
+  renderStackedBar(
+    document.getElementById("tokChart"), buckets, tSeries, (b, key) => b[key],
+    (v, compact) => compact ? fmtTok(v) : fmtTokFull(v), state.hiddenTok
+  );
+  renderLegend(document.getElementById("tokLegend"), tSeries, state.hiddenTok, key => {
+    state.hiddenTok.has(key) ? state.hiddenTok.delete(key) : state.hiddenTok.add(key);
+    renderCharts();
+  });
+
+  renderTable(buckets);
+}
+
+/* ================= テーブル ================= */
+function renderTable(buckets) {
+  const tbl = document.getElementById("dataTable");
+  tbl.innerHTML = "";
+  const head = ["期間", "入力", "出力", "キャッシュ作成", "キャッシュ読取", "合計トークン", "API換算コスト"];
+  const tr = document.createElement("tr");
+  for (const h of head) { const th = document.createElement("th"); th.textContent = h; tr.append(th); }
+  tbl.append(tr);
+  for (const b of [...buckets].reverse()) {
+    const total = b.input + b.output + b.cacheCreate + b.cacheRead;
+    const cells = [b.labelFull, fmtTokFull(b.input), fmtTokFull(b.output),
+      fmtTokFull(b.cacheCreate), fmtTokFull(b.cacheRead), fmtTokFull(total), fmtUSD(b.cost)];
+    const row = document.createElement("tr");
+    for (const c of cells) { const td = document.createElement("td"); td.textContent = c; row.append(td); }
+    tbl.append(row);
+  }
+}
+
+/* ================= データ取得 ================= */
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+let firstLoad = true;
+async function loadAll(refresh) {
+  const banner = document.getElementById("errorBanner");
+  const cards = document.querySelectorAll(".card, .kpi-row");
+  cards.forEach(c => c.classList.add("loading")); // 前の描画を薄く保持(スケルトンは出さない)
+  try {
+    const q = refresh ? "?refresh=1" : "";
+    const [usage, blocks] = await Promise.all([
+      fetchJSON("/api/usage" + q),
+      fetchJSON("/api/blocks" + q).catch(() => ({ blocks: [] })), // ブロックは補助情報なので失敗しても続行
+    ]);
+    state.daily = usage.daily || [];
+    state.blocks = blocks.blocks || [];
+    banner.style.display = "none";
+    document.getElementById("updated").textContent =
+      "最終更新 " + new Date(usage.fetchedAt).toLocaleTimeString("ja-JP");
+    renderAll();
+  } catch (e) {
+    banner.style.display = "block";
+    banner.innerHTML = "";
+    const b = document.createElement("b"); b.textContent = "データ取得エラー: ";
+    banner.append(b, String(e.message || e));
+    if (firstLoad) {
+      const hint = document.createElement("div");
+      hint.textContent = "ccusage の初回ダウンロード中の可能性があります。少し待ってから「再集計」を押してください。";
+      banner.append(hint);
+    }
+  } finally {
+    cards.forEach(c => c.classList.remove("loading"));
+    firstLoad = false;
+  }
+}
+
+function renderAll() {
+  renderPlanCard();
+  renderBlockCard();
+  renderKPIs();
+  renderCharts();
+}
+
+/* ================= イベント ================= */
+document.getElementById("refreshBtn").addEventListener("click", () => loadAll(true));
+
+document.getElementById("rangeSeg").addEventListener("click", e => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  state.rangeDays = Number(btn.dataset.days);
+  document.querySelectorAll("#rangeSeg button").forEach(b => b.classList.toggle("on", b === btn));
+  renderCharts();
+});
+document.getElementById("granSeg").addEventListener("click", e => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  state.granularity = btn.dataset.g;
+  document.querySelectorAll("#granSeg button").forEach(b => b.classList.toggle("on", b === btn));
+  renderCharts();
+});
+document.getElementById("hideCacheRead").addEventListener("change", e => {
+  state.hideCacheRead = e.target.checked;
+  state.hiddenTok.clear();
+  renderCharts();
+});
+
+const planSelect = document.getElementById("planSelect");
+const customWrap = document.getElementById("customPriceWrap");
+const customPrice = document.getElementById("customPrice");
+planSelect.value = state.plan;
+customPrice.value = state.customPrice;
+customWrap.style.display = state.plan === "custom" ? "" : "none";
+function savePlan() {
+  localStorage.setItem("tokendash.plan", JSON.stringify({ plan: state.plan, customPrice: state.customPrice }));
+}
+planSelect.addEventListener("change", () => {
+  state.plan = planSelect.value;
+  customWrap.style.display = state.plan === "custom" ? "" : "none";
+  savePlan(); renderPlanCard();
+});
+customPrice.addEventListener("change", () => {
+  state.customPrice = Math.max(1, Number(customPrice.value) || 100);
+  savePlan(); renderPlanCard();
+});
+
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderCharts, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+
+// 自動更新: 使用状況は5分ごと、ブロックは60秒ごと(サーバー側キャッシュに従う)
+setInterval(() => loadAll(false), 5 * 60 * 1000);
+setInterval(async () => {
+  try {
+    const blocks = await fetchJSON("/api/blocks");
+    state.blocks = blocks.blocks || [];
+    renderBlockCard();
+  } catch (e) { /* 次回に期待 */ }
+}, 60 * 1000);
+
+loadAll(false);
+</script>
+</body>
+</html>
